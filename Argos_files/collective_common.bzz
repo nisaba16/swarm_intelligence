@@ -1,0 +1,142 @@
+include "vec2.bzz"
+
+# -----------------------------------------------------------------------------
+# Collective motion model shared by the experiment variants.
+#
+# The wrappers set the constants below before including this file:
+#   EXPERIMENT_MODE
+#   DISSIDENT_SHARE
+#   LEADER_SHARE
+#   W_SOCIAL
+#   W_GOAL
+#   SOCIAL_ROTATION
+# -----------------------------------------------------------------------------
+
+ROLE_LEADER    = 0
+ROLE_DISSIDENT = 1
+ROLE_NEUTRAL   = 2
+
+HALF_PI = 1.57079632679
+
+# Lennard-Jones parameters used to keep the swarm coherent.
+TARGET_KIN     = 120.0
+EPSILON_KIN    = 150.0
+TARGET_NONKIN  = 85.0
+EPSILON_NONKIN = 100.0
+
+MAX_COMMAND = 4.0
+
+# Creates a normalized heading from a vector, unless the vector is zero.
+function limit_vector(v, max_len) {
+  var l = math.vec2.length(v)
+  if(l > max_len) {
+    return math.vec2.scale(v, max_len / l)
+  }
+  return v
+}
+
+# Lennard-Jones interaction magnitude.
+function lj_magnitude(dist, target, epsilon) {
+  return -(epsilon / dist) * ((target / dist)^4 - (target / dist)^2)
+}
+
+# Neighbor data to LJ interaction vector.
+function lj_vector_kin(rid, data) {
+  return math.vec2.newp(lj_magnitude(data.distance, TARGET_KIN, EPSILON_KIN), data.azimuth)
+}
+
+# Neighbor data to LJ interaction vector.
+function lj_vector_nonkin(rid, data) {
+  return math.vec2.newp(lj_magnitude(data.distance, TARGET_NONKIN, EPSILON_NONKIN), data.azimuth)
+}
+
+# Accumulator of neighbor LJ interactions.
+function lj_sum(rid, data, accum) {
+  return math.vec2.add(data, accum)
+}
+
+# Computes the social interaction term.
+function social_vector() {
+  var accum = neighbors.kin().map(lj_vector_kin).reduce(lj_sum, math.vec2.new(0.0, 0.0))
+  accum = neighbors.nonkin().map(lj_vector_nonkin).reduce(lj_sum, accum)
+
+  if(neighbors.count() > 0) {
+    accum = math.vec2.scale(accum, 1.0 / neighbors.count())
+  }
+
+  if(SOCIAL_ROTATION != 0.0) {
+    accum = math.vec2.rotate(accum, SOCIAL_ROTATION)
+  }
+
+  return accum
+}
+
+# Role assignment based on the robot id.
+function agent_role() {
+  if(EXPERIMENT_MODE != 2) {
+    return ROLE_LEADER
+  }
+
+  var slot = id % 100
+  if(slot < DISSIDENT_SHARE) {
+    return ROLE_DISSIDENT
+  }
+  if(slot < DISSIDENT_SHARE + LEADER_SHARE) {
+    return ROLE_LEADER
+  }
+  return ROLE_NEUTRAL
+}
+
+# Goal direction for each role.
+function goal_vector(role) {
+  if(EXPERIMENT_MODE == 2) {
+    if(role == ROLE_DISSIDENT) {
+      return math.vec2.new(-1.0, 0.0)
+    }
+    return math.vec2.new(1.0, 0.0)
+  }
+
+  # Polarized and milling runs share the same nominal goal direction.
+  return math.vec2.new(1.0, 0.0)
+}
+
+# Displays the role through LEDs.
+function paint_role(role) {
+  if(role == ROLE_DISSIDENT) {
+    set_leds(255, 0, 0)
+    return
+  }
+
+  if(role == ROLE_LEADER) {
+    set_leds(0, 255, 0)
+    return
+  }
+
+  set_leds(0, 0, 255)
+}
+
+# Main controller logic for all experiments.
+function collective_step() {
+  var role = agent_role()
+  var social = social_vector()
+  var goal = goal_vector(role)
+
+  social = math.vec2.scale(social, W_SOCIAL)
+  goal = math.vec2.scale(goal, W_GOAL)
+
+  var drive = math.vec2.add(social, goal)
+  drive = limit_vector(drive, MAX_COMMAND)
+
+  goto(drive.x, drive.y)
+}
+
+function init() {
+  paint_role(agent_role())
+}
+
+function step() {
+  collective_step()
+}
+
+function destroy() {
+}

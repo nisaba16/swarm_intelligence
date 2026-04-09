@@ -1,0 +1,9 @@
+# Conflict experiment: leaders and dissidents pursue opposing goals.
+EXPERIMENT_MODE = 2
+DISSIDENT_SHARE = 20
+LEADER_SHARE = 50
+W_SOCIAL = 1.0
+W_GOAL = 1.4
+SOCIAL_ROTATION = 0.0
+
+include "collective_common.bzz"

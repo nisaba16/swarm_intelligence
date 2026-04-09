@@ -1,0 +1,46 @@
+MAX_COUNT = 0
+COUNT     = 0
+DONE      = false
+
+function init() {
+    MAX_COUNT = math.floor(math.rng.uniform(50, 250))
+    COUNT     = 0
+    DONE      = false
+    set_leds(255, 0, 0)
+}
+
+function step() {
+    # count
+    if(not DONE) {
+        COUNT = COUNT + 1
+        if(COUNT >= MAX_COUNT) {
+            DONE = true
+            set_leds(0, 255, 0)
+        }
+    }
+
+    # broadcast done state
+    neighbors.broadcast("done", DONE)
+
+    # check if all neighbors are done too
+    if(DONE) {
+        var all_done = neighbors.reduce(
+            "done",
+            function(rid, value, acc) {
+                return acc and (value == true)
+            },
+            true
+        )
+
+        if(all_done and neighbors.count() > 0) {
+            set_leds(0, 0, 255)  
+        }
+    }
+}
+
+function reset() {
+    init()
+}
+
+function destroy() {
+}
