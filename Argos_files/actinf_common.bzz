@@ -50,7 +50,7 @@ function wrap_pi(a) {
 function sector_of(az) {
   var lo = SECTOR_OFF
   var hi = SECTOR_OFF + L * SECTOR_ANG
-  if(az < lo || az >= hi) {
+  if(az < lo or az >= hi) {
     return -1
   }
   # Walk through sectors to avoid floor()
