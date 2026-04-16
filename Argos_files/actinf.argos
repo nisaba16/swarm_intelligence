@@ -28,7 +28,7 @@
 
   <!--
     Arena: 10 x 10 m.
-    rab_range = 80 cm = 0.8 m (should match R0 in actinf.bzz).
+    rab_range = 120 cm = 1.2 m (should match R0 in actinf.bzz).
     N = 30 agents.
   -->
   <arena size="10, 10, 1" center="0,0,0.5">
@@ -46,10 +46,11 @@
     </box>
 
     <distribute>
-      <position method="uniform" min="-3,-3,0" max="3,3,0" />
+      <!-- Spawn closer together so robots immediately perceive neighbors -->
+      <position method="uniform" min="-2,-2,0" max="2,2,0" />
       <orientation method="gaussian" mean="0,0,0" std_dev="360,0,0" />
-      <entity quantity="50" max_trials="100">
-        <kheperaiv id="kiv" rab_data_size="50" rab_range="80">
+      <entity quantity="30" max_trials="100">
+        <kheperaiv id="kiv" rab_data_size="50" rab_range="120">
           <controller config="actinf" />
         </kheperaiv>
       </entity>

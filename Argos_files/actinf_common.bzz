@@ -292,18 +292,21 @@ function actinf_step() {
   }
 
   # -------------------------------------------------------------------------
-  # 3) Apply action update and normalize
+  # 3) Apply action update and send motion command
   # -------------------------------------------------------------------------
   ai_vel = math.vec2.sub(ai_vel, math.vec2.scale(dFdv, KA))
 
-  var spd = math.vec2.length(ai_vel)
-  if(spd > 0.001) {
-    ai_vel = math.vec2.scale(ai_vel, 1.0 / spd)
-  } else {
-    ai_vel = math.vec2.new(1.0, 0.0)
-  }
+  # Convert desired direction into a bounded turn command.
+  # Without this, a sideways/backwards desired vector can trigger hard-turn
+  # mode in the differential drive controller -> spinning in place.
+  var ang = math.atan(ai_vel.y, ai_vel.x)
 
-  goto(ai_vel.x * SPEED, ai_vel.y * SPEED)
+  if(isnil(MAX_TURN)) { MAX_TURN = 0.6 }
+  if(ang >  MAX_TURN) { ang =  MAX_TURN }
+  if(ang < -MAX_TURN) { ang = -MAX_TURN }
+
+  # Command constant forward speed with limited turning (polar goto).
+  gotop(SPEED, ang)
 }
 
 # ============= Standard Buzz hooks =============
