@@ -19,3 +19,20 @@ This folder contains Buzz and ARGoS setups for the collective motion project.
 - `collective_common.bzz` contains the shared controller logic.
 - The role proportions and motion weights are set in each wrapper script.
 - `barrier.bzz` and `shapeform.bzz` are kept as earlier reference experiments.
+
+
+Plot trajectories
+
+```
+python3 plot_trajectories.py --logdir logs_milling --mode heatmap --tail 600 \
+  --center-radius 3 --bins 300 --dpi 400 --figsize 9 --out results/heatmap_zoom_hi_milling.png
+
+python3 plot_trajectories.py --logdir logs_polar --mode heatmap --tail 600 \
+  --center-radius 3 --bins 300 --dpi 400 --figsize 9 --out results/heatmap_zoom_hi_polarize.png
+```
+
+```
+python3 plot_trajectories.py --logdir logs_millin --mode anim --tail 1000 --stride 2 --fps 20 --out results/traj_slow_polarized.mp4
+
+python3 plot_trajectories.py --logdir logs_polar --mode anim --tail 1000 --stride 2 --fps 20 --out results/traj_slow_polarized.mp4
+```
