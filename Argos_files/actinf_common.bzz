@@ -1,42 +1,89 @@
 include "vec2.bzz"
 
 # =============================================================================
-# Active Inference model for collective motion.
-# Implements generalized filtering + active inference control from:
-#   Heins et al. (2023) "Collective behavior from surprise minimization"
+# Active inference controller (Buzz) aligned with the Julia reference
+# (collective_motion_actinf): predictive coding in generalised coordinates.
 #
-# Each agent maintains beliefs (mu, mu', mu'') about the average neighbor
-# distance in L sensory sectors, and updates its heading to minimize the
-# variational free energy of its generative model.
+# Hidden state per sector l (L sectors):
+#   μ0[l]  : mean distance in sector
+#   μ1[l]  : 1st generalised order (distance velocity)
+#   μ2[l]  : 2nd generalised order (distance acceleration)
 #
-# Core equations implemented:
-#   Belief update (A.37):
-#     dmu/dt   = mu'  + xi_z  - alpha * xi_w
-#     dmu'/dt  = mu'' + xi_z1 - alpha * xi_w1 - xi_w
-#     dmu''/dt =              - alpha * xi_w2  - xi_w1
+# Observations per sector (ndo_φ = 2):
+#   φ0[l] = y[l]    (average distance)
+#   φ1[l] = y'[l]   (finite-difference derivative)
 #
-#   Action update (A.51):
-#     dv/dt = sum_l  xi_z1[l] * Delta_r_hat[l]
-#             where xi_z1[l] = 2 * Gamma_z * lambda_z^2 * (y'[l] - mu'[l])
+# The Julia code uses:
+#   ∂μ/∂t = Dμ + ε_z + ε_ω
+#   ε_z   = ∇g * Π_z * (φ - g(μ))
+#   ε_ω   = ∇fᵀ * Π_ω * (Dμ - f(μ)) - Dᵀ * Π_ω * (Dμ - f(μ))
+# Here we implement the same structure with a simplified choice:
+#   - spatial precisions are diagonal (no cross-sector coupling)
+#   - temporal precision matrices use the closed forms for n=2 and n=3
+#     from the same Gaussian kernel used in the Julia implementation.
 #
-# Parameters (set by experiment wrapper before including this file):
-#   L           - number of sensory sectors (default 4)
-#   SECTOR_ANG  - sector width in radians (PI/3 = 60 deg)
-#   SECTOR_OFF  - angle of sector 0 left edge (-2*PI/3 = -120 deg)
-#   R0          - neighbor interaction radius
-#   GAMMA_Z     - sensory amplitude precision
-#   GAMMA_W     - process amplitude precision
-#   LAMBDA_Z    - sensory smoothness parameter
-#   LAMBDA_W    - process smoothness parameter
-#   ALPHA       - attractor drift rate (how fast distance relaxes to eta)
-#   ETA         - preferred distance set-point
-#   KMU         - inference learning rate (step size for belief update)
-#   KA          - action learning rate (step size for velocity update)
-#   SPEED       - heading vector scaled by this for goto()
+# Parameters expected to be defined before including this file:
+#   L, SECTOR_ANG, SECTOR_OFF, R0
+#   ETA
+#   SIGMA_Z, SIGMA_W     (σ_z, σ_ω in Julia; precision uses 1/σ)
+#   S_Z, S_W             (s_z, s_ω in Julia; temporal smoothness)
+#   ALPHA                (α_f in Julia; flow strength)
+#   KMU, KA, SPEED
 # =============================================================================
 
 PI     = 3.14159265359
 TWO_PI = 6.28318530718
+
+# --- Position logging (optional) --------------------------------------------
+# Each robot writes its own CSV to avoid concurrent-write issues.
+# Uses Buzz built-in io.* and the global pose table (positioning sensor).
+if(isnil(LOG_POSITIONS)) { LOG_POSITIONS = 0 }
+if(isnil(LOG_EVERY))     { LOG_EVERY     = 1 }
+if(isnil(LOG_DIR))       { LOG_DIR       = "." }
+
+poslog_file = nil
+poslog_step = 0
+
+function poslog_init() {
+  poslog_step = 0
+  poslog_file = nil
+  if(LOG_POSITIONS == 0) { return }
+  var fname = string.concat(LOG_DIR, "/pos_", string.tostring(id), ".csv")
+  poslog_file = io.fopen(fname, "w")
+  if(isnil(poslog_file)) {
+    # If opening fails, just disable logging silently.
+    LOG_POSITIONS = 0
+    return
+  }
+  io.fwrite(poslog_file, "step,id,x,y,yaw")
+}
+
+function poslog_tick() {
+  if(LOG_POSITIONS == 0) { return }
+  if(isnil(poslog_file)) { return }
+  if(LOG_EVERY <= 0) { return }
+  if((poslog_step % LOG_EVERY) != 0) {
+    poslog_step = poslog_step + 1
+    return
+  }
+  if(isnil(pose)) {
+    poslog_step = poslog_step + 1
+    return
+  }
+  var x = pose.position.x
+  var y = pose.position.y
+  var yaw = pose.orientation.yaw
+  io.fwrite(poslog_file,
+            poslog_step, ",", id, ",", x, ",", y, ",", yaw)
+  poslog_step = poslog_step + 1
+}
+
+function poslog_close() {
+  if(LOG_POSITIONS == 0) { return }
+  if(isnil(poslog_file)) { return }
+  io.fclose(poslog_file)
+  poslog_file = nil
+}
 
 # Wrap angle to [-pi, pi]
 function wrap_pi(a) {
@@ -67,18 +114,18 @@ function sector_of(az) {
 
 # Initialize agent state (call from init())
 function actinf_init() {
-  # Belief state: 3 generalised coordinates per sector
-  ai_mu  = {}   # 0th order: believed distance
-  ai_mu1 = {}   # 1st order: believed distance velocity
-  ai_mu2 = {}   # 2nd order: believed distance acceleration
-  ai_yprev = {} # previous observation for finite-difference y'
+  ai_mu0   = {}
+  ai_mu1   = {}
+  ai_mu2   = {}
+  ai_yprev = {}
+  ai_first = 1
 
   var l = 0
   while(l < L) {
-    ai_mu[l]   = ETA
-    ai_mu1[l]  = 0.0
-    ai_mu2[l]  = 0.0
-    ai_yprev[l]= ETA
+    ai_mu0[l]   = ETA
+    ai_mu1[l]   = 0.0
+    ai_mu2[l]   = 0.0
+    ai_yprev[l] = 0.0
     l = l + 1
   }
 
@@ -87,24 +134,25 @@ function actinf_init() {
   ai_vel = math.vec2.new(math.cos(ang), math.sin(ang))
 }
 
-# One tick: observe -> update beliefs -> update action
+# One tick
 function actinf_step() {
   var dt = 0.1  # seconds per tick (ticks_per_second = 10)
 
   # -------------------------------------------------------------------------
-  # 1. Accumulate observations per sector from range-and-bearing
+  # 1) Build sector-wise observations (φ0 = y, φ1 = y')
+  #    and the geometric term dh/dr_self (matches Julia's dh_dr_self).
   # -------------------------------------------------------------------------
-  var y_sum  = {}   # sum of distances
-  var dr_x   = {}   # sum of unit-vector x toward neighbors
-  var dr_y   = {}   # sum of unit-vector y toward neighbors
-  var cnt    = {}
+  var y_sum = {}
+  var ux_sum = {}
+  var uy_sum = {}
+  var cnt = {}
 
   var l = 0
   while(l < L) {
-    y_sum[l] = 0.0
-    dr_x[l]  = 0.0
-    dr_y[l]  = 0.0
-    cnt[l]   = 0
+    y_sum[l]  = 0.0
+    ux_sum[l] = 0.0
+    uy_sum[l] = 0.0
+    cnt[l]    = 0
     l = l + 1
   }
 
@@ -113,118 +161,145 @@ function actinf_step() {
       var az  = wrap_pi(data.azimuth)
       var sec = sector_of(az)
       if(sec >= 0) {
-        y_sum[sec] = y_sum[sec] + data.distance
-        dr_x[sec]  = dr_x[sec]  + math.cos(az)
-        dr_y[sec]  = dr_y[sec]  + math.sin(az)
-        cnt[sec]   = cnt[sec]   + 1
+        y_sum[sec]  = y_sum[sec]  + data.distance
+        ux_sum[sec] = ux_sum[sec] + math.cos(az)
+        uy_sum[sec] = uy_sum[sec] + math.sin(az)
+        cnt[sec]    = cnt[sec] + 1
       }
     }
   })
 
-  # Compute sector averages; fall back to ETA (zero error) if sector empty
-  var y    = {}
-  var drx  = {}
-  var dry  = {}
+  var y  = {}
+  var y1 = {}
+  var dhx = {}  # dh/dr_self x
+  var dhy = {}  # dh/dr_self y
+
   l = 0
   while(l < L) {
     if(cnt[l] > 0) {
-      var k   = cnt[l]
-      y[l]   = y_sum[l] / k
-      drx[l] = dr_x[l]  / k
-      dry[l] = dr_y[l]  / k
+      var k = cnt[l]
+      y[l]  = y_sum[l] / k
+
+      # mean unit vector pointing to neighbors
+      var mx = ux_sum[l] / k
+      var my = uy_sum[l] / k
+
+      # Julia: dh_dr_self = -mean(unit_vectors)
+      dhx[l] = -mx
+      dhy[l] = -my
     } else {
-      y[l]   = ETA
-      drx[l] = 0.0
-      dry[l] = 0.0
+      # Julia uses 0 observations for empty sectors and explicitly nullifies
+      # their prediction errors.
+      y[l]  = 0.0
+      dhx[l] = 0.0
+      dhy[l] = 0.0
     }
     l = l + 1
   }
 
-  # -------------------------------------------------------------------------
-  # 2. First-order observation y' via finite difference
-  # -------------------------------------------------------------------------
-  var y1 = {}
-  l = 0
-  while(l < L) {
-    y1[l] = (y[l] - ai_yprev[l]) / dt
-    l = l + 1
+  if(ai_first == 1) {
+    # Avoid a huge transient from finite differences on the first tick.
+    l = 0
+    while(l < L) {
+      y1[l] = 0.0
+      ai_yprev[l] = y[l]
+      l = l + 1
+    }
+    ai_first = 0
+  } else {
+    l = 0
+    while(l < L) {
+      if(y[l] == 0.0) {
+        y1[l] = 0.0
+      } else {
+        y1[l] = (y[l] - ai_yprev[l]) / dt
+      }
+      ai_yprev[l] = y[l]
+      l = l + 1
+    }
   }
 
   # -------------------------------------------------------------------------
-  # 3. Precision constants (diagonal approximation to Π̃)
-  #    Sensory:  pi_z0 = Gamma_z,   pi_z1 = 2*Gamma_z*lambda_z^2
-  #    Process:  pi_w0 = Gamma_w,   pi_w1 = 2*Gamma_w*lambda_w^2
+  # 2) Predictive coding update (per sector) using Julia-style structure.
+  #    Temporal precision closed forms for Gaussian kernel:
+  #      ndo_φ=2: Rz = diag(1, 2*s_z^2)
+  #      ndo_x=3: Rw = [[3/2, 0, s_w^2], [0, 2*s_w^2, 0], [s_w^2, 0, 2*s_w^4]]
+  #    Spatial precisions assumed diagonal -> multiply by 1/σ.
   # -------------------------------------------------------------------------
-  var pi_z0 = GAMMA_Z
-  var pi_z1 = 2.0 * GAMMA_Z * LAMBDA_Z * LAMBDA_Z
-  var pi_w0 = GAMMA_W
-  var pi_w1 = 2.0 * GAMMA_W * LAMBDA_W * LAMBDA_W
+  var inv_sig_z = 1.0 / SIGMA_Z
+  var inv_sig_w = 1.0 / SIGMA_W
+  var sz2 = S_Z * S_Z
+  var sw2 = S_W * S_W
+  var sw4 = sw2 * sw2
 
-  # -------------------------------------------------------------------------
-  # 4. Belief update + action accumulation (per sector)
-  # -------------------------------------------------------------------------
-  var dv = math.vec2.new(0.0, 0.0)
+  var dFdv = math.vec2.new(0.0, 0.0)
 
   l = 0
   while(l < L) {
-    # -- Sensory prediction errors --
-    var eps_z  = y[l]  - ai_mu[l]
-    var eps_z1 = y1[l] - ai_mu1[l]
+    # ---- sensory prediction error ----
+    var e0 = 0.0
+    var e1 = 0.0
+    if(y[l] != 0.0) {
+      e0 = y[l]  - ai_mu0[l]
+      e1 = y1[l] - ai_mu1[l]
+    }
 
-    # Precision-weighted sensory errors
-    var xi_z  = pi_z0 * eps_z
-    var xi_z1 = pi_z1 * eps_z1
+    # Π_z * (φ - g(μ)) with diagonal spatial precision (1/σ_z)
+    # and temporal precision for ndo_φ=2
+    var pw_z0 = inv_sig_z * e0
+    var pw_z1 = inv_sig_z * (2.0 * sz2) * e1
 
-    # -- Process (model) prediction errors (from dynamics f = -alpha*(x - eta)) --
-    # eps_omega  = D*mu - f(mu) component-wise:
-    var eps_w  = ai_mu1[l] + ALPHA * (ai_mu[l] - ETA)   # 0th order
-    var eps_w1 = ai_mu2[l] + ALPHA * ai_mu1[l]           # 1st order
-    var eps_w2 = ALPHA      * ai_mu2[l]                   # 2nd order
+    # ε_z = ∇g * Π_z * error; with linear g, ∇g just selects μ0/μ1
+    var eps_z0 = pw_z0
+    var eps_z1 = pw_z1
 
-    # Precision-weighted process errors (diagonal Π̃_omega)
-    var xi_w  = pi_w0 * eps_w
-    var xi_w1 = pi_w1 * eps_w1
-    # xi_w2 enters dmu''/dt only; use pi_w0 * eps_w2 as a rough approximation
-    var xi_w2 = pi_w0 * eps_w2
+    # ---- process prediction error ----
+    # p_pe = Dμ - f(μ), with f = -α(μ - η)
+    var pe0 = ai_mu1[l] + ALPHA * (ai_mu0[l] - ETA)
+    var pe1 = ai_mu2[l] + ALPHA * ai_mu1[l]
+    var pe2 = ALPHA * ai_mu2[l]
 
-    # -- Belief update: dmu_tilde/dt = D*mu_tilde + grad_g^T xi_z + grad_f^T xi_w - D^T xi_w
-    #    Expanded for 3 orders (A.37):
-    #    dmu/dt   = mu'  + xi_z  - alpha*xi_w  - 0
-    #    dmu'/dt  = mu'' + xi_z1 - alpha*xi_w1 - xi_w
-    #    dmu''/dt = 0    + 0     - alpha*xi_w2 - xi_w1
-    var dmu  = ai_mu1[l] + xi_z  - ALPHA * xi_w
-    var dmu1 = ai_mu2[l] + xi_z1 - ALPHA * xi_w1 - xi_w
-    var dmu2 =                   - ALPHA * xi_w2  - xi_w1
+    # Π_ω * p_pe (diagonal spatial precision 1/σ_w, temporal 3x3)
+    var pw_w0 = inv_sig_w * (1.5 * pe0 + sw2 * pe2)
+    var pw_w1 = inv_sig_w * (2.0 * sw2 * pe1)
+    var pw_w2 = inv_sig_w * (sw2 * pe0 + 2.0 * sw4 * pe2)
 
-    ai_mu[l]  = ai_mu[l]  + KMU * dmu
+    # ε_ω = ∇fᵀ * Π_ω p_pe - Dᵀ Π_ω p_pe
+    # with ∇fᵀ = -α I and Dᵀ acting as [0, p0, p1]
+    var eps_w0 = -ALPHA * pw_w0
+    var eps_w1 = -ALPHA * pw_w1 - pw_w0
+    var eps_w2 = -ALPHA * pw_w2 - pw_w1
+
+    # ---- belief dynamics: ∂μ/∂t = Dμ + ε_z + ε_ω ----
+    var dmu0 = ai_mu1[l] + eps_z0 + eps_w0
+    var dmu1 = ai_mu2[l] + eps_z1 + eps_w1
+    var dmu2 =               eps_w2
+
+    ai_mu0[l] = ai_mu0[l] + KMU * dmu0
     ai_mu1[l] = ai_mu1[l] + KMU * dmu1
     ai_mu2[l] = ai_mu2[l] + KMU * dmu2
 
-    # Store previous observation
-    ai_yprev[l] = y[l]
-
-    # -- Action contribution from this sector (A.51) --
-    # dv += xi_z1[l] * Delta_r_hat[l]
-    # (xi_z1 is already recomputed using updated mu1)
-    var xi_z1_act = pi_z1 * (y1[l] - ai_mu1[l])
-    dv = math.vec2.add(dv, math.vec2.new(
-      xi_z1_act * drx[l],
-      xi_z1_act * dry[l]
+    # ---- action gradient (Julia: ∂F/∂v = ∂F/∂φ' ⋅ ∂φ'/∂v) ----
+    # We approximate h' with y' (finite difference).
+    # ∂φ'/∂v ≈ h' * dh/dr_self.
+    # Julia updates v <- v - κ_a * ∂F/∂v.
+    dFdv = math.vec2.add(dFdv, math.vec2.new(
+      eps_z1 * y1[l] * dhx[l],
+      eps_z1 * y1[l] * dhy[l]
     ))
 
     l = l + 1
   }
 
   # -------------------------------------------------------------------------
-  # 5. Apply action update and renormalize heading to unit speed
+  # 3) Apply action update and normalize
   # -------------------------------------------------------------------------
-  ai_vel = math.vec2.add(ai_vel, math.vec2.scale(dv, KA))
+  ai_vel = math.vec2.sub(ai_vel, math.vec2.scale(dFdv, KA))
 
   var spd = math.vec2.length(ai_vel)
   if(spd > 0.001) {
     ai_vel = math.vec2.scale(ai_vel, 1.0 / spd)
   } else {
-    # Recover from degenerate state: face forward
     ai_vel = math.vec2.new(1.0, 0.0)
   }
 
@@ -235,11 +310,14 @@ function actinf_step() {
 
 function init() {
   actinf_init()
+  poslog_init()
 }
 
 function step() {
   actinf_step()
+  poslog_tick()
 }
 
 function destroy() {
+  poslog_close()
 }
