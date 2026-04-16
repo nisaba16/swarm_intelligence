@@ -18,11 +18,12 @@ R0         = 1.2             # meters (should match rab_range=120cm in .argos)
 ETA        = 0.3             # meters (preferred neighbor distance)
 
 # --- Hyper-parameters ---
-# If robots spin / jitter, reduce SPEED first, then reduce KA.
-KMU      = 0.08  # belief step size
-KA       = 0.03  # action step size
-SPEED    = 5.0   # forward speed (used as linear speed)
-MAX_TURN = 0.4   # rad, clamp turning to avoid in-place spinning
+# NOTE: SPEED/KA/MAX_TURN/TURN_GAIN are overridden inside each PRESET below.
+KMU       = 0.08  # belief step size
+KA        = 0.03  # action step size (default)
+SPEED     = 4.0   # forward speed (default)
+MAX_TURN  = 0.4   # rad, clamp turning (default)
+TURN_GAIN = 1.0   # scales turning angle (default)
 
 # --- Logging ---
 # If enabled, each robot writes its own CSV to LOG_DIR.
@@ -37,28 +38,42 @@ LOG_DIR       = "logs"
 #   S_Z, S_W         : temporal smoothness parameters (s_z, s_ω)
 #   ALPHA            : flow strength α_f
 if(PRESET == 0) {
-  # Polarized-like baseline (close to demo_vectorized.jl defaults)
+  # Polarized-like: reduce turning authority so trajectories stay straighter.
+  # (This model is distance-based; without an explicit heading-alignment term,
+  #  limiting turn is the most reliable way to avoid milling.)
   SIGMA_Z = 1.487   # ≈ exp(0.397)
   SIGMA_W = 1.649   # ≈ exp(0.5)
-  S_Z     = 0.8673
-  S_W     = 1.0
-  ALPHA   = 0.5
+  S_Z      = 0.6
+  S_W      = 1.4
+  ALPHA    = 0.25
+  SPEED    = 4.0
+  KA       = 0.015
+  MAX_TURN = 0.20
+  TURN_GAIN= 0.25
 }
 else if(PRESET == 1) {
-  # Milling-like baseline (heuristic: stronger dependence on φ')
+  # Milling-like: allow more turning and rely more on φ' terms.
   SIGMA_Z = 1.487
   SIGMA_W = 1.649
-  S_Z     = 1.6
-  S_W     = 0.8
-  ALPHA   = 1.0
+  S_Z      = 1.8
+  S_W      = 0.7
+  ALPHA    = 1.2
+  SPEED    = 4.5
+  KA       = 0.03
+  MAX_TURN = 0.60
+  TURN_GAIN= 1.0
 }
 else {
-  # Fallback
+  # Fallback (same as PRESET 0)
   SIGMA_Z = 1.487
   SIGMA_W = 1.649
-  S_Z     = 0.8673
-  S_W     = 1.0
-  ALPHA   = 0.5
+  S_Z      = 0.6
+  S_W      = 1.4
+  ALPHA    = 0.25
+  SPEED    = 4.0
+  KA       = 0.015
+  MAX_TURN = 0.20
+  TURN_GAIN= 0.25
 }
 
 include "actinf_common.bzz"

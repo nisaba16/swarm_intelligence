@@ -301,6 +301,11 @@ function actinf_step() {
   # mode in the differential drive controller -> spinning in place.
   var ang = math.atan(ai_vel.y, ai_vel.x)
 
+  # TURN_GAIN scales turning authority; lowering it helps avoid perfect circles
+  # (constant-curvature limit cycles) in the polarized preset.
+  if(isnil(TURN_GAIN)) { TURN_GAIN = 1.0 }
+  ang = ang * TURN_GAIN
+
   if(isnil(MAX_TURN)) { MAX_TURN = 0.6 }
   if(ang >  MAX_TURN) { ang =  MAX_TURN }
   if(ang < -MAX_TURN) { ang = -MAX_TURN }
