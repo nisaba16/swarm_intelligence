@@ -1,27 +1,38 @@
-# Active inference — dissident-goal experiment entry point.
+# Active inference — dissident-goal conflict experiment.
 #
-# This file is intentionally separate from actinf.bzz so you can re-run
-# the previous experiments unchanged.
+# All robots use the same active inference update equations (Heins et al. 2023,
+# Eq. 2-3): beliefs μ are updated by minimising free energy, and the heading
+# vector v is updated by the sensorimotor contingency term.  The ONLY
+# difference between majority and dissident robots is their goal prior:
+# a lightweight bias added to ai_vel each tick that encodes a preferred
+# heading direction in the generative model.
 #
 # Compile:
 #   bzzc -I . -b actinf_dissident.bo -d actinf_dissident.bdb actinf_dissident.bzz
 # Run:
 #   argos3 -c actinf_dissident.argos
 
-PRESET = 0
-
 # --- Shared geometry / environment ---
 L          = 4
-SECTOR_ANG = 1.04719755120   # PI/3
-SECTOR_OFF = -2.09439510239  # -2*PI/3
-R0         = 1.2             # meters (rab_range=120cm)
-ETA        = 0.3             # meters
+SECTOR_ANG = 1.04719755120   # PI/3  (60 deg per sector)
+SECTOR_OFF = -2.09439510239  # -2*PI/3  (front 240 deg coverage)
+R0         = 0.8             # RAB range in metres (matches rab_range=80cm)
+ETA        = 0.3             # preferred neighbour distance
 
-# --- Hyper-parameters ---
-KMU       = 0.08
-KA        = 0.03
+# --- Active inference precision parameters — polarized regime ---
+# Matches actinf.bzz PRESET=0: log(Γ_z) ≈ +0.36, λ_z = 0.6
+# → upper-left of Fig 2B (high polarization, low milling probability)
+SIGMA_Z   = 1.0     # γ_Z = 1.0  (Table 2 polarized)
+SIGMA_W   = 1.0
+S_Z       = 1.0     # λ_Z = 1.0
+S_W       = 1.0
+ALPHA     = 0.5
+
+# --- Motion parameters ---
+KMU       = 0.1
+KA        = 0.1
 SPEED     = 4.0
-MAX_TURN  = 0.4
+MAX_TURN  = 0.60
 TURN_GAIN = 1.0
 
 # --- Logging ---
@@ -29,66 +40,20 @@ LOG_POSITIONS = 1
 LOG_EVERY     = 5
 LOG_DIR       = "logs"
 
-# --- (Optional) goal + dissidents ---
-# Select dissidents (reproducible): the lowest IDs are dissidents.
-# With N_ROBOTS=30 and DISSIDENT_FRAC=0.2 -> ~6 dissidents.
+# --- Subgroup assignment ---
+# The N_ROBOTS robots with the lowest IDs become dissidents.
 N_ROBOTS       = 30
-DISSIDENT_FRAC = 0.2
+DISSIDENT_FRAC = 0  # 9/30 dissidents
 
-# Majority goal: fixed heading (mode=1) OR point target (mode=2) OR none (0)
-# If you want to reproduce the "goal-directed" baseline first, set this.
+# --- Goal priors (the only thing that differs between subgroups) ---
+# Majority: bottom-right  (-pi/4 = -45 deg)
 GOAL_MODE    = 1
-GOAL_HEADING = 0.0          # radians (0 = +x)
-GOAL_WEIGHT  = 0.15         # 0 disables the goal
+GOAL_HEADING = -0.78539816339
+GOAL_WEIGHT  = 0.25
 
-# Dissident goal (a different objective)
+# Dissidents: top-left  (3*pi/4 = 135 deg)
 DISS_GOAL_MODE    = 1
-DISS_GOAL_HEADING = 3.14159265359   # pi (towards -x)
-DISS_GOAL_WEIGHT  = 0.30
-
-# Alternative: point targets
-# GOAL_MODE = 2
-# GOAL_X = 4.0
-# GOAL_Y = 0.0
-# DISS_GOAL_MODE = 2
-# DISS_GOAL_X = -4.0
-# DISS_GOAL_Y = 0.0
-
-# --- Presets (same structure as actinf.bzz) ---
-if(PRESET == 0) {
-  # Polarized-like (with reduced turning)
-  SIGMA_Z = 1.487
-  SIGMA_W = 1.649
-  S_Z      = 0.6
-  S_W      = 1.4
-  ALPHA    = 0.25
-  SPEED    = 4.0
-  KA       = 0.015
-  MAX_TURN = 0.20
-  TURN_GAIN= 0.25
-}
-else if(PRESET == 1) {
-  # Milling-like
-  SIGMA_Z = 1.487
-  SIGMA_W = 1.649
-  S_Z      = 1.8
-  S_W      = 0.7
-  ALPHA    = 1.2
-  SPEED    = 4.5
-  KA       = 0.03
-  MAX_TURN = 0.60
-  TURN_GAIN= 1.0
-}
-else {
-  SIGMA_Z = 1.487
-  SIGMA_W = 1.649
-  S_Z      = 0.6
-  S_W      = 1.4
-  ALPHA    = 0.25
-  SPEED    = 4.0
-  KA       = 0.015
-  MAX_TURN = 0.20
-  TURN_GAIN= 0.25
-}
+DISS_GOAL_HEADING = 2.35619449019
+DISS_GOAL_WEIGHT  = 0.25
 
 include "actinf_common.bzz"
