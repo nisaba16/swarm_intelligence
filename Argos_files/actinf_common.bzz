@@ -92,6 +92,35 @@ function wrap_pi(a) {
   return a
 }
 
+# Safe vector normalization (vec2.norm() would divide by 0)
+function vec2_norm_safe(v) {
+  var l = math.vec2.length(v)
+  if(l < 0.000001) {
+    return math.vec2.new(0.0, 0.0)
+  }
+  return math.vec2.scale(v, 1.0 / l)
+}
+
+# Goal vector helper
+# GOAL_MODE / DISS_GOAL_MODE:
+#   0 = none
+#   1 = fixed global heading (radians)
+#   2 = point target (x,y)
+function compute_goal_vec(mode, heading, gx, gy) {
+  if(mode == 1) {
+    return math.vec2.new(math.cos(heading), math.sin(heading))
+  }
+  if(mode == 2) {
+    if(isnil(pose)) {
+      return math.vec2.new(0.0, 0.0)
+    }
+    var dx = gx - pose.position.x
+    var dy = gy - pose.position.y
+    return vec2_norm_safe(math.vec2.new(dx, dy))
+  }
+  return math.vec2.new(0.0, 0.0)
+}
+
 # Return sector index 0..L-1 for azimuth az, or -1 if outside all sectors.
 # Sectors span [SECTOR_OFF, SECTOR_OFF + L*SECTOR_ANG).
 function sector_of(az) {
@@ -127,6 +156,20 @@ function actinf_init() {
     ai_mu2[l]   = 0.0
     ai_yprev[l] = 0.0
     l = l + 1
+  }
+
+  # Dissident selection (disabled by default)
+  # Use either:
+  #   DISSIDENT_FRAC in [0,1] with N_ROBOTS
+  # or:
+  #   DISSIDENT_COUNT directly
+  if(isnil(N_ROBOTS))        { N_ROBOTS = 30 }
+  if(isnil(DISSIDENT_FRAC))  { DISSIDENT_FRAC = 0.0 }
+  if(isnil(DISSIDENT_COUNT)) { DISSIDENT_COUNT = DISSIDENT_FRAC * N_ROBOTS }
+
+  ai_is_dissident = 0
+  if(DISSIDENT_COUNT > 0 and id < DISSIDENT_COUNT) {
+    ai_is_dissident = 1
   }
 
   # Initial heading: spread agents evenly by id to avoid symmetry
@@ -292,9 +335,46 @@ function actinf_step() {
   }
 
   # -------------------------------------------------------------------------
-  # 3) Apply action update and send motion command
+  # 3) Apply action update and (optionally) bias with a goal, then send motion
   # -------------------------------------------------------------------------
   ai_vel = math.vec2.sub(ai_vel, math.vec2.scale(dFdv, KA))
+
+  # Optional: goal bias (kept OFF by default so old experiments are unchanged)
+  # Majority goal params:
+  #   GOAL_MODE (0/1/2), GOAL_HEADING, GOAL_X, GOAL_Y, GOAL_WEIGHT
+  # Dissident goal params:
+  #   DISS_GOAL_MODE, DISS_GOAL_HEADING, DISS_GOAL_X, DISS_GOAL_Y, DISS_GOAL_WEIGHT
+  if(isnil(GOAL_MODE)) { GOAL_MODE = 0 }
+  if(isnil(GOAL_WEIGHT)) { GOAL_WEIGHT = 0.0 }
+  if(isnil(GOAL_HEADING)) { GOAL_HEADING = 0.0 }
+  if(isnil(GOAL_X)) { GOAL_X = 0.0 }
+  if(isnil(GOAL_Y)) { GOAL_Y = 0.0 }
+
+  if(isnil(DISS_GOAL_MODE)) { DISS_GOAL_MODE = GOAL_MODE }
+  if(isnil(DISS_GOAL_WEIGHT)) { DISS_GOAL_WEIGHT = GOAL_WEIGHT }
+  if(isnil(DISS_GOAL_HEADING)) { DISS_GOAL_HEADING = GOAL_HEADING }
+  if(isnil(DISS_GOAL_X)) { DISS_GOAL_X = GOAL_X }
+  if(isnil(DISS_GOAL_Y)) { DISS_GOAL_Y = GOAL_Y }
+
+  var w = 0.0
+  var g = math.vec2.new(0.0, 0.0)
+
+  if(ai_is_dissident == 1) {
+    w = DISS_GOAL_WEIGHT
+    if(w > 0.0 and DISS_GOAL_MODE != 0) {
+      g = compute_goal_vec(DISS_GOAL_MODE, DISS_GOAL_HEADING, DISS_GOAL_X, DISS_GOAL_Y)
+    }
+  } else {
+    w = GOAL_WEIGHT
+    if(w > 0.0 and GOAL_MODE != 0) {
+      g = compute_goal_vec(GOAL_MODE, GOAL_HEADING, GOAL_X, GOAL_Y)
+    }
+  }
+
+  if(w > 0.0 and (g.x != 0.0 or g.y != 0.0)) {
+    # bias desired direction; we only care about direction (angle)
+    ai_vel = vec2_norm_safe(math.vec2.add(ai_vel, math.vec2.scale(g, w)))
+  }
 
   # Convert desired direction into a bounded turn command.
   # Without this, a sideways/backwards desired vector can trigger hard-turn
