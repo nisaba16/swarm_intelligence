@@ -38,21 +38,18 @@ LOG_DIR       = "logs"
 #   S_Z, S_W         : temporal smoothness parameters (s_z, s_ω)
 #   ALPHA            : flow strength α_f
 if(PRESET == 0) {
-  # Polarized: goal heading bias breaks the milling fixed point.
-  # Without GOAL_MODE=1 the distance-only action gradient vanishes in milling
-  # (neighbors stay equidistant) so rotation is self-sustaining.
-  SIGMA_Z    = 1.487
-  SIGMA_W    = 1.649
-  S_Z        = 0.6
-  S_W        = 1.4
-  ALPHA      = 0.25
-  SPEED      = 4.0
-  KA         = 0.015
-  MAX_TURN   = 0.30
-  TURN_GAIN  = 0.5
-  GOAL_MODE    = 1    # fixed global heading
-  GOAL_HEADING = 0.0  # radians (east / +x)
-  GOAL_WEIGHT  = 0.6  # tune: higher -> straighter, lower -> more cohesive
+  # Polarized-like: reduce turning authority so trajectories stay straighter.
+  # (This model is distance-based; without an explicit heading-alignment term,
+  #  limiting turn is the most reliable way to avoid milling.)
+  SIGMA_Z = 1.487   # ≈ exp(0.397)
+  SIGMA_W = 1.649   # ≈ exp(0.5)
+  S_Z      = 0.6
+  S_W      = 1.4
+  ALPHA    = 0.25
+  SPEED    = 4.0
+  KA       = 0.015
+  MAX_TURN = 0.20
+  TURN_GAIN= 0.25
 }
 else if(PRESET == 1) {
   # Milling-like: allow more turning and rely more on φ' terms.
