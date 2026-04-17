@@ -102,6 +102,26 @@ def read_logs(logdir: str) -> List[LogPoint]:
     return points
 
 
+def select_window(
+    points: List[LogPoint],
+    start_step: int | None,
+    end_step: int | None,
+) -> List[LogPoint]:
+    if start_step is None and end_step is None:
+        return points
+
+    lo = start_step
+    hi = end_step
+    if lo is None:
+        lo = min(p.step for p in points)
+    if hi is None:
+        hi = max(p.step for p in points)
+    if hi < lo:
+        raise ValueError(f"Invalid window: end-step ({hi}) < start-step ({lo})")
+
+    return [p for p in points if (p.step >= lo and p.step <= hi)]
+
+
 def select_tail(points: List[LogPoint], tail: int | None) -> List[LogPoint]:
     if not tail or tail <= 0:
         return points
@@ -241,11 +261,134 @@ def animate(
     plt.close(fig)
 
 
+def _group_positions_by_step(points: List[LogPoint]) -> Tuple[List[int], Dict[int, Dict[int, Tuple[float, float, float]]]]:
+    """Return (sorted_steps, step->rid->(x,y,yaw))."""
+    by_step: Dict[int, Dict[int, Tuple[float, float, float]]] = {}
+    for p in points:
+        by_step.setdefault(p.step, {})[p.rid] = (p.x, p.y, p.yaw)
+    steps = sorted(by_step.keys())
+    return steps, by_step
+
+
+def compute_order_parameters(points: List[LogPoint]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compute order parameters from logs.
+
+    Returns arrays (steps, polarization, milling, n_agents_used).
+
+    Definitions (both in [0,1]):
+      polarization(t) = ||mean_i vhat_i||
+      milling(t)      = |mean_i cross(rhat_i, vhat_i)|
+
+    where rhat_i is position relative to centroid (unit), vhat_i is finite-difference velocity direction (unit).
+    """
+    steps, by_step = _group_positions_by_step(points)
+
+    prev_pos: Dict[int, Tuple[float, float, int]] = {}  # rid -> (x,y,step)
+
+    pol_list: List[float] = []
+    mil_list: List[float] = []
+    n_list: List[int] = []
+    steps_out: List[int] = []
+
+    for step in steps:
+        rids = sorted(by_step[step].keys())
+        if not rids:
+            continue
+
+        # positions for centroid
+        pos = np.array([[by_step[step][rid][0], by_step[step][rid][1]] for rid in rids], dtype=float)
+        c = pos.mean(axis=0)
+
+        vhat_rows = []
+        rhat_rows = []
+
+        for i, rid in enumerate(rids):
+            x, y, _yaw = by_step[step][rid]
+            prev = prev_pos.get(rid)
+            prev_pos[rid] = (x, y, step)
+            if prev is None:
+                continue
+
+            x0, y0, step0 = prev
+            dx = x - x0
+            dy = y - y0
+            sp = float(np.hypot(dx, dy))
+            if sp <= 1e-9:
+                continue
+
+            vhat = np.array([dx, dy], dtype=float) / sp
+            r = np.array([x, y], dtype=float) - c
+            rn = float(np.hypot(r[0], r[1]))
+            if rn <= 1e-9:
+                continue
+            rhat = r / rn
+
+            vhat_rows.append(vhat)
+            rhat_rows.append(rhat)
+
+        n_used = len(vhat_rows)
+        if n_used < 3:
+            continue
+
+        V = np.stack(vhat_rows, axis=0)
+        R = np.stack(rhat_rows, axis=0)
+
+        pol = float(np.linalg.norm(V.mean(axis=0)))
+        cross_z = R[:, 0] * V[:, 1] - R[:, 1] * V[:, 0]
+        mil = float(np.abs(cross_z.mean()))
+
+        steps_out.append(step)
+        pol_list.append(pol)
+        mil_list.append(mil)
+        n_list.append(n_used)
+
+    return (
+        np.array(steps_out, dtype=int),
+        np.array(pol_list, dtype=float),
+        np.array(mil_list, dtype=float),
+        np.array(n_list, dtype=int),
+    )
+
+
+def write_metrics_csv(path: str, steps: np.ndarray, pol: np.ndarray, mil: np.ndarray, n_used: np.ndarray) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["step", "polarization", "milling", "n_agents_used"])
+        for s, p, m, n in zip(steps, pol, mil, n_used):
+            w.writerow([int(s), float(p), float(m), int(n)])
+
+
+def plot_metrics(out_png: str, steps: np.ndarray, pol: np.ndarray, mil: np.ndarray, n_used: np.ndarray, title: str, dpi: int) -> None:
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(9, 4.2), dpi=dpi)
+    ax.plot(steps, pol, label="polarization (0..1)", lw=2)
+    ax.plot(steps, mil, label="milling (0..1)", lw=2)
+    ax.set_ylim(-0.02, 1.02)
+    ax.set_xlabel("step")
+    ax.set_ylabel("order parameter")
+    ax.grid(True, alpha=0.25)
+    ax2 = ax.twinx()
+    ax2.plot(steps, n_used, label="agents used", color="black", alpha=0.25, lw=1)
+    ax2.set_ylabel("agents used")
+    ax.set_title(title)
+    lines, labels = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines + lines2, labels + labels2, loc="upper right")
+    fig.tight_layout()
+    fig.savefig(out_png)
+    plt.close(fig)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--logdir", default="logs", help="Directory with pos_*.csv")
-    ap.add_argument("--mode", choices=["heatmap", "final", "anim"], default="heatmap")
+    ap.add_argument("--mode", choices=["heatmap", "final", "anim", "metrics"], default="heatmap")
     ap.add_argument("--out", default=None, help="Output file (png/gif/mp4)")
+    ap.add_argument("--csv", default=None, help="Optional CSV output (used by --mode metrics)")
+    ap.add_argument("--start-step", type=int, default=None, help="First step to include (inclusive)")
+    ap.add_argument("--end-step", type=int, default=None, help="Last step to include (inclusive)")
     ap.add_argument("--tail", type=int, default=400, help="Keep only last N steps (0 = all)")
     ap.add_argument("--bins", type=int, default=80, help="Heatmap bins per axis")
     ap.add_argument("--dpi", type=int, default=220, help="Figure DPI (higher = more pixels)")
@@ -264,6 +407,9 @@ def main() -> int:
 
     extent = _parse_extent(args.extent, args.arena_size, args.center_radius)
     points = read_logs(args.logdir)
+    points = select_window(points, args.start_step, args.end_step)
+    if not points:
+        raise SystemExit("No points left after applying --start-step/--end-step window")
     points = select_tail(points, args.tail)
 
     out = args.out
@@ -272,17 +418,30 @@ def main() -> int:
             "heatmap": "heatmap.png",
             "final": "final_positions.png",
             "anim": "traj.mp4",
+            "metrics": "metrics.png",
         }[args.mode]
 
-    title = f"{args.mode} from {os.path.basename(os.path.abspath(args.logdir))} (tail={args.tail})"
+    window_str = ""
+    if args.start_step is not None or args.end_step is not None:
+        window_str = f" window=[{args.start_step},{args.end_step}]"
+
+    title = f"{args.mode} from {os.path.basename(os.path.abspath(args.logdir))} (tail={args.tail}){window_str}"
 
     try:
         if args.mode == "heatmap":
             plot_heatmap(points, extent=extent, bins=args.bins, out=out, title=title, dpi=args.dpi, figsize=args.figsize)
         elif args.mode == "final":
             plot_final(points, extent=extent, out=out, title=title, dpi=args.dpi, figsize=args.figsize)
-        else:
+        elif args.mode == "anim":
             animate(points, extent=extent, out=out, fps=args.fps, stride=args.stride, dpi=args.dpi, figsize=args.figsize)
+        else:
+            steps, pol, mil, n_used = compute_order_parameters(points)
+            if steps.size == 0:
+                raise RuntimeError("Not enough data to compute metrics (need >=2 samples per robot and >=3 robots)")
+            csv_out = args.csv or os.path.splitext(out)[0] + ".csv"
+            write_metrics_csv(csv_out, steps, pol, mil, n_used)
+            plot_metrics(out, steps, pol, mil, n_used, title=title, dpi=args.dpi)
+            print(csv_out)
     except Exception as e:
         raise SystemExit(f"Failed to generate plot: {e}")
 
