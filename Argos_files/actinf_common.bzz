@@ -189,10 +189,30 @@ function actinf_init() {
   math.rng.setseed(id * 31337 + 1)
 
   if(isnil(NOISE_ANG)) { NOISE_ANG = 0.0 }
+  if(isnil(INIT_MODE)) { INIT_MODE = 0 }
 
-  # Random initial heading (uniform over [0, 2π]).
-  var init_ang = math.rng.uniform(0.0, TWO_PI)
-  ai_vel = math.vec2.new(math.cos(init_ang), math.sin(init_ang))
+  # INIT_MODE 0: random heading (uniform over [0, 2π]) — default.
+  # INIT_MODE 1: tangential CCW relative to spawn position.
+  #   Each robot faces perpendicular to its position vector from the origin
+  #   (= (-y/r, x/r)), seeding a counterclockwise orbit so the milling
+  #   attractor can be reached without continuous-time SDE noise levels.
+  if(INIT_MODE == 1) {
+    if(not isnil(pose)) {
+      var px = pose.position.x
+      var py = pose.position.y
+      var r  = math.sqrt(px * px + py * py)
+      if(r > 0.01) {
+        ai_vel = math.vec2.new(-py / r, px / r)
+      } else {
+        ai_vel = math.vec2.new(1.0, 0.0)
+      }
+    } else {
+      ai_vel = math.vec2.new(1.0, 0.0)
+    }
+  } else {
+    var init_ang = math.rng.uniform(0.0, TWO_PI)
+    ai_vel = math.vec2.new(math.cos(init_ang), math.sin(init_ang))
+  }
 
 }
 
@@ -382,6 +402,17 @@ function actinf_step() {
     var noise = math.rng.uniform(-NOISE_ANG, NOISE_ANG)
     var nang  = math.atan(ai_vel.y, ai_vel.x) + noise
     ai_vel    = math.vec2.new(math.cos(nang), math.sin(nang))
+  }
+
+  # OMEGA_BIAS: constant angular rotation of ai_vel per tick (rad/tick, CCW > 0).
+  # Without this, INIT_MODE=1 robots follow tangent straight lines and the ring
+  # expands outward — ai_vel has no mechanism to track the orbital heading.
+  # With OMEGA_BIAS, ai_vel continuously rotates, maintaining circular orbit;
+  # the social distance force then locks in the ETA radius.
+  if(isnil(OMEGA_BIAS)) { OMEGA_BIAS = 0.0 }
+  if(OMEGA_BIAS != 0.0) {
+    var oang = math.atan(ai_vel.y, ai_vel.x) + OMEGA_BIAS
+    ai_vel = math.vec2.new(math.cos(oang), math.sin(oang))
   }
 
   # Optional: goal bias (kept OFF by default so old experiments are unchanged)

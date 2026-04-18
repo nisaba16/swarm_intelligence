@@ -150,7 +150,7 @@ def plot_heatmap(
     white_bg: bool = True,
 ) -> None:
     import matplotlib.pyplot as plt
-    import matplotlib.colors as mcolors
+    import matplotlib as mpl
 
     xs = np.array([p.x for p in points], dtype=float)
     ys = np.array([p.y for p in points], dtype=float)
@@ -161,7 +161,7 @@ def plot_heatmap(
     H = H.T
 
     if white_bg:
-        cmap = plt.cm.get_cmap("YlOrRd").copy()
+        cmap = mpl.colormaps.get_cmap("YlOrRd").copy()
         cmap.set_under("white")
         vmin = 0.5   # bins with 0 visits appear white
     else:
@@ -300,13 +300,14 @@ def animate(
     COLOR_LEAD  = "#3a86ff"
     COLOR_DISS  = "#ff3a3a"
 
-    # Adaptive dot size: render robots at ~3× Khepera IV body diameter (14 cm)
-    # so they are visible regardless of follow_radius or arena_size.
+    # Adaptive dot size: render robots at ~1× Khepera IV body diameter (14 cm)
+    # so they stay readable in follow view without becoming huge.
     # matplotlib scatter s = area in points².  1 point = figsize*72 / window_m metres.
     window_m   = 2 * follow_radius if following else max(xmax - xmin, ymax - ymin)
     pts_per_m  = figsize * 72 / window_m
-    dot        = int((3.0 * 0.14 * pts_per_m) ** 2)   # 3× robot diameter
+    dot        = int((1.0 * 0.14 * pts_per_m) ** 2)   # ~1× robot diameter
     dot        = max(dot, 8)                           # floor so arena view isn't invisible
+    dot        = min(dot, 260)                         # cap so follow view doesn't blow up
 
     if has_roles:
         scat_uninf = ax.scatter([], [], s=dot,     color=COLOR_UNINF, zorder=2, label="uninformed")

@@ -75,13 +75,17 @@ else if(PRESET == 1) {
   SIGMA_W   = 1.0
   S_Z       = 1.0
   S_W       = 1.0
-  ALPHA     = 1.0
+  ALPHA     = 2.0
   SPEED     = 4.0
   KMU       = 0.1
-  KA        = 1.0
+  KA        = 0.4
   MAX_TURN  = 1.0
   TURN_GAIN = 1.0
-  NOISE_ANG = 0.15
+  NOISE_ANG  = 0.02
+  INIT_MODE  = 1
+  # Small CCW bias — natural solo radius = SPEED/(OMEGA_BIAS/dt) = 4/0.1 = 40 cm ≈ ETA.
+  # Social force then phase-locks all robots into a collective orbit.
+  OMEGA_BIAS = 0.01
 }
 
 else if(PRESET == 2) {
