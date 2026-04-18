@@ -185,9 +185,14 @@ function actinf_init() {
   ai_is_dissident = 0
   if(ai_role == 2) { ai_is_dissident = 1 }
 
-  # Initial heading: spread agents evenly by id to avoid symmetry
-  var ang = (id % 50) * TWO_PI / 50.0
-  ai_vel = math.vec2.new(math.cos(ang), math.sin(ang))
+  # Seed per-robot RNG so noise sequences are independent across robots.
+  math.rng.setseed(id * 31337 + 1)
+
+  if(isnil(NOISE_ANG)) { NOISE_ANG = 0.0 }
+
+  # Random initial heading (uniform over [0, 2π]).
+  var init_ang = math.rng.uniform(0.0, TWO_PI)
+  ai_vel = math.vec2.new(math.cos(init_ang), math.sin(init_ang))
 
 }
 
@@ -261,11 +266,14 @@ function actinf_step() {
   }
 
   if(ai_first == 1) {
-    # Avoid a huge transient from finite differences on the first tick.
+    # First tick: initialise μ0 from actual observed distance instead of ETA.
+    # This zeroes the initial prediction error so the flow prior drifts robots
+    # toward ETA gently, with no repulsion shock from starting too close.
     l = 0
     while(l < L) {
       y1[l] = 0.0
       ai_yprev[l] = y[l]
+      if(y[l] > 0.0) { ai_mu0[l] = y[l] }
       l = l + 1
     }
     ai_first = 0
@@ -362,6 +370,19 @@ function actinf_step() {
   ai_vel = math.vec2.sub(ai_vel, math.vec2.scale(dFdv, KA))
   # Keep ai_vel as a unit direction vector; magnitude is handled by SPEED.
   ai_vel = vec2_norm_safe(ai_vel)
+
+  # Action noise: σ_a dW, approximated as per-tick angular perturbation.
+  # This is the dW term from the continuous-time SDE (Heins 2023).
+  # It breaks rotational symmetry so milling can emerge from random IC.
+  # NOISE_ANG = 0 disables noise (polarized preset; no noise needed).
+  if(NOISE_ANG > 0.0) {
+    # uniform(-NOISE_ANG, NOISE_ANG): std_dev = NOISE_ANG/sqrt(3) ≈ 0.58*NOISE_ANG.
+    # Using uniform (same API as HW10) to avoid ambiguity with gaussian's
+    # std_dev vs variance convention.
+    var noise = math.rng.uniform(-NOISE_ANG, NOISE_ANG)
+    var nang  = math.atan(ai_vel.y, ai_vel.x) + noise
+    ai_vel    = math.vec2.new(math.cos(nang), math.sin(nang))
+  }
 
   # Optional: goal bias (kept OFF by default so old experiments are unchanged)
   # Majority goal params:

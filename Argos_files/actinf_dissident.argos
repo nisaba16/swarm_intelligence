@@ -30,25 +30,25 @@
     Same arena as actinf.argos; only the controller bytecode differs.
     rab_range = 120 cm = 1.2 m (should match R0 in the .bzz).
   -->
-  <arena size="10, 10, 1" center="0,0,0.5">
-    <box id="wall_north" size="9,0.1,0.5" movable="false">
-      <body position="0,4.5,0" orientation="0,0,0" />
+  <arena size="30, 30, 1" center="0,0,0.5">
+    <box id="wall_north" size="29,0.1,0.5" movable="false">
+      <body position="0,14.5,0" orientation="0,0,0" />
     </box>
-    <box id="wall_south" size="9,0.1,0.5" movable="false">
-      <body position="0,-4.5,0" orientation="0,0,0" />
+    <box id="wall_south" size="29,0.1,0.5" movable="false">
+      <body position="0,-14.5,0" orientation="0,0,0" />
     </box>
-    <box id="wall_east" size="0.1,9,0.5" movable="false">
-      <body position="4.5,0,0" orientation="0,0,0" />
+    <box id="wall_east" size="0.1,29,0.5" movable="false">
+      <body position="14.5,0,0" orientation="0,0,0" />
     </box>
-    <box id="wall_west" size="0.1,9,0.5" movable="false">
-      <body position="-4.5,0,0" orientation="0,0,0" />
+    <box id="wall_west" size="0.1,29,0.5" movable="false">
+      <body position="-14.5,0,0" orientation="0,0,0" />
     </box>
 
     <distribute>
-      <position method="uniform" min="-0.5,-0.5,0" max="0.5,0.5,0" />
+      <position method="uniform" min="-2.0,-2.0,0" max="2.0,2.0,0" />
       <orientation method="gaussian" mean="0,0,0" std_dev="360,0,0" />
       <entity quantity="30" max_trials="1000">
-        <kheperaiv id="kiv" rab_data_size="50" rab_range="80">
+        <kheperaiv id="kiv" rab_data_size="50" rab_range="300">
           <controller config="actinf_dissident" />
         </kheperaiv>
       </entity>
@@ -69,7 +69,7 @@
       <user_functions label="buzz_qt" />
       <camera>
         <placements>
-          <placement index="0" position="0,0,20"
+          <placement index="0" position="0,0,50"
                      look_at="0,0,0" up="0,1,0"
                      lens_focal_length="65" />
         </placements>
