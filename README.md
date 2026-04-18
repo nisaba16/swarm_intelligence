@@ -174,11 +174,11 @@ Use `--start-step` / `--end-step` to restrict to a time window.
 ### Dissident animation (with goal arrows)
 
 ```bash
-python3 ../plot_trajectories.py --logdir logs --mode anim \
+python3 plot_trajectories.py --logdir Argos_files/logs_dissident_milling_80_33 --mode anim \
   --tail 0 --stride 2 --fps 30 \
   --figsize 6 --dpi 150 \
   --goal-heading -0.785 --diss-goal-heading 2.356 \
-  --out results/video_dissident.mp4
+  --out tmp.mp4
 ```
 
 Colours: uninformed = gray, leaders = blue, dissidents = red.
