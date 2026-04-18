@@ -9,6 +9,34 @@ mkdir -p logs results
 
 ---
 
+## Workflow for one experiment
+
+1. Create `logs/` inside `Argos_files/` if it does not exist
+2. Run ARGoS from `Argos_files/` — position logs are written to `Argos_files/logs/`
+3. Move logs to a named folder: `mv logs logs_milling` (or copy)
+4. Run `plot_trajectories.py` pointing at that folder
+
+```
+project/
+├── Argos_files/
+│     ├── actinf.argos
+│     ├── actinf.bzz
+│     ├── actinf_common.bzz
+│     ├── actinf_dissident.argos
+│     ├── actinf_dissident.bzz
+│     ├── collective_common.bzz
+│     └── logs/               ← ARGoS writes here
+├── logs/
+│     ├── logs_milling/
+│     ├── logs_polar/
+│     └── logs_dissident_XX/
+├── results/
+├── plot_trajectories.py
+└── README.md
+```
+
+---
+
 ## Experiments
 
 ### 1. Baseline (rule-based, Lennard-Jones)
@@ -27,26 +55,47 @@ Single controller `actinf.bzz`, switch behaviour by changing `PRESET`:
 
 | PRESET | Behaviour |
 |---|---|
-| `0` | Polarized-like (low α, low turning) |
-| `1` | Milling-like (high α, high turning) |
+| `0` | Polarized |
+| `1` | Milling |
+| `2` | Disordered |
 
-Key parameters: `SIGMA_Z`, `SIGMA_W`, `S_Z`, `S_W`, `ALPHA`, `KMU`, `KA`, `SPEED`, `MAX_TURN`.
+**Implementation note:** `ai_vel` and `dFdv` are computed in the **global frame** to match
+the Julia reference implementation. Body-frame RAB azimuths are rotated by `+yaw` before
+accumulating the gradient. Steering angle = `desired_global_heading − current_yaw`.
+
+**Physical note:** the paper uses point particles. The Khepera IV has a 14 cm body, so
+`ETA` (preferred neighbour distance) must be > 2 × 0.14 m = 0.28 m. Currently `ETA = 0.5 m`.
+
+**Tuning guide** (phase diagram Fig 2B of Heins et al. 2023):
+
+| Parameter | More polarized | More milling |
+|---|---|---|
+| `SIGMA_Z` (= 1/Γ_z) | decrease | increase |
+| `S_Z` (= λ_z) | decrease | increase |
+| `ALPHA` | decrease | increase |
+| `KA` | decrease | increase |
 
 ### 3. Active inference — dissident conflict
 
-`actinf_dissident.bzz` — same active inference equations as above, but two subgroups have
-opposing goal priors:
+`actinf_dissident.bzz` — three roles, assigned deterministically by robot ID:
 
-- **Majority** (70 %): bottom-right (−45°)
-- **Dissidents** (30 %): top-left (135°)
+| Role | IDs | Goal |
+|---|---|---|
+| Dissident | `0 .. dissident_count` | Target B: top-left (135°) |
+| Leader | `dissident_count .. informed_count` | Target A: bottom-right (−45°) |
+| Uninformed | rest | Social term only (no goal) |
 
-Key parameters: `DISSIDENT_FRAC`, `GOAL_WEIGHT`, `DISS_GOAL_WEIGHT`.
+Key parameters in `actinf_dissident.bzz`:
 
-> **Which base regime to use for the dissident experiment?**
-> Use the **polarized setting** (PRESET=0 parameters, which is the default in
-> `actinf_dissident.bzz`). The conflict between goal directions is most visible
-> when the base behaviour has directed motion. Milling adds a circular attractor
-> on top of the goal conflict, making results harder to interpret.
+```
+N_ROBOTS       = 30
+INFORMED_FRAC  = 0.5   # fraction of robots that are informed (leaders + dissidents)
+DISSIDENT_FRAC = 0.33  # fraction of *informed* robots that are dissidents
+GOAL_WEIGHT    = 0.25  # weight of goal vector relative to social term
+```
+
+To sweep dissident proportion while keeping informed count fixed, vary only `DISSIDENT_FRAC`:
+`0.0` (all leaders), `0.33`, `0.5`, `0.67`, `1.0` (all dissidents).
 
 ---
 
@@ -55,7 +104,7 @@ Key parameters: `DISSIDENT_FRAC`, `GOAL_WEIGHT`, `DISS_GOAL_WEIGHT`.
 ### Active inference (base)
 
 ```bash
-# Edit PRESET in actinf.bzz first (0 = polarized, 1 = milling)
+# Edit PRESET in actinf.bzz first (0 = polarized, 1 = milling, 2 = disordered)
 bzzc -I . -b actinf.bo -d actinf.bdb actinf.bzz
 argos3 -c actinf.argos          # with GUI
 argos3 -z -c actinf.argos       # headless (faster)
@@ -77,85 +126,65 @@ argos3 -c collective_polarized.argos
 
 ---
 
+## Log format
+
+Each robot writes one CSV file: `logs/pos_<id>.csv`
+
+```
+step,id,role,x,y,yaw
+```
+
+| Column | Type | Description |
+|---|---|---|
+| `step` | int | Simulation tick (logged every `LOG_EVERY` ticks, default 5) |
+| `id` | int | Robot ID (0-based) |
+| `role` | int | `0` = uninformed, `1` = leader, `2` = dissident |
+| `x`, `y` | float | Position in metres (global frame, arena centred at 0,0) |
+| `yaw` | float | Heading in radians (global frame, 0 = +x axis) |
+
+Old logs without the `role` column are still accepted (role defaults to 0).
+
+---
+
 ## Plots & videos
 
-The script `plot_trajectories.py` lives one level up (`../plot_trajectories.py`).
-Run from `Argos_files/` so log paths resolve correctly.
+`plot_trajectories.py` lives one level up. Run from `Argos_files/` or pass full paths.
 
-### Heatmap (white background, specific step range)
+### Animation
 
 ```bash
-# Milling — steps 200–800
-python3 ../plot_trajectories.py --logdir logs_logs --mode heatmap \
-  --start-step 200 --end-step 800 \
-  --center-radius 3 --bins 300 --dpi 400 --figsize 9 \
-  --out results/heatmap_milling.png
+python3 ../plot_trajectories.py --logdir logs --mode anim \
+  --tail 0 --stride 2 --fps 30 \
+  --figsize 6 --dpi 150 \
+  --out results/video.mp4
+```
 
-# Polarized — last 600 steps
+### Heatmap
+
+```bash
 python3 ../plot_trajectories.py --logdir logs --mode heatmap \
-  --tail 600 \
-  --center-radius 3 --bins 300 --dpi 400 --figsize 9 \
-  --out results/heatmap_polarized.png
+  --tail 600 --bins 300 --dpi 400 --figsize 9 \
+  --title "Milling | α=1.2 N=30" \
+  --out results/heatmap.png
 ```
 
-Add `--no-white-bg` to switch back to the dark (inferno) colormap.
+Add `--no-white-bg` to switch to the dark (inferno) colormap.
+Use `--start-step` / `--end-step` to restrict to a time window.
 
-Use `--title` to label the plot with the parameters you used:
-
-```bash
-python3 plot_trajectories.py --logdir logs/logs_milling --mode heatmap \
-  --tail 600 --center-radius 3 --bins 300 --dpi 400 --figsize 9 \
-  --title "Milling settings  | α=1.2  N=30" \
-  --out results/heatmap_milling.png
-```
+### Dissident animation (with goal arrows)
 
 ```bash
-python3 plot_trajectories.py --logdir logs/logs_polar --mode heatmap \
-  --tail 600 --center-radius 3 --bins 300 --dpi 400 --figsize 9 \
-  --title "Polarized settings  | α=0.25  N=30" \
-  --out results/heatmap_polar.png
-```
-
-
-### Videos — milling vs polarized
-
-Run ARGoS twice (once with `PRESET=1`, once with `PRESET=0`), saving logs to
-separate folders, then:
-
-```bash
-# Milling video
-python3 plot_trajectories.py --logdir logs/logs_milling --mode anim \
+python3 ../plot_trajectories.py --logdir logs --mode anim \
   --tail 0 --stride 2 --fps 30 \
-  --center-radius 4 --figsize 6 --dpi 150 \
-  --out results/video_milling.mp4
-
-# Polarized video
-python3 plot_trajectories.py --logdir logs/logs_polar --mode anim \
-  --tail 0 --stride 2 --fps 30 \
-  --center-radius 4 --figsize 6 --dpi 150 \
-  --out results/video_polarized.mp4
-
-
-```
-
-### Videos — dissident conflict (with goal arrows)
-
-The `--goal-heading` and `--diss-goal-heading` flags draw arrows from the
-arena centre showing each group's objective.  Majority = blue, dissidents = red.
-
-```bash
-python3 plot_trajectories.py --logdir logs/logs_dissident_00 --mode anim \
-  --tail 0 --stride 2 --fps 30 \
-  --center-radius 4 --figsize 6 --dpi 150 \
+  --figsize 6 --dpi 150 \
   --goal-heading -0.785 --diss-goal-heading 2.356 \
-  --out results/video_dissident_05.mp4
+  --out results/video_dissident.mp4
 ```
 
-To compare across different dissident fractions, run ARGoS three times
-(`DISSIDENT_FRAC` = 0.1, 0.3, 0.5) into separate log folders, then generate
-one video per folder with the same command above.
+Colours: uninformed = gray, leaders = blue, dissidents = red.
+Arrows show each group's goal direction from the arena centre.
 
-### Order-parameter metrics (polarization & milling score over time)
+### Order-parameter metrics
 
 ```bash
 python3 ../plot_trajectories.py --logdir logs --mode metrics \
@@ -164,18 +193,4 @@ python3 ../plot_trajectories.py --logdir logs --mode metrics \
   --csv results/metrics.csv
 ```
 
-The CSV has columns `step, polarization, milling, n_agents_used` and can be
-opened directly in Excel or LibreOffice.
-
----
-
-## Log format
-
-Each robot writes `logs/pos_<id>.csv`:
-
-```
-step,id,role,x,y,yaw
-```
-
-`role`: `0` = majority, `1` = dissident.  Old logs without the `role` column
-are still accepted (role defaults to 0).
+CSV columns: `step, polarization, milling, n_agents_used`.

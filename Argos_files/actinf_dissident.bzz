@@ -40,18 +40,30 @@ LOG_POSITIONS = 1
 LOG_EVERY     = 5
 LOG_DIR       = "logs"
 
-# --- Subgroup assignment ---
-# The N_ROBOTS robots with the lowest IDs become dissidents.
+# --- Role assignment ---
+# Three roles: 0=uninformed (social only), 1=leader (goal A), 2=dissident (goal B)
+#
+# INFORMED_FRAC : fraction of N_ROBOTS that are informed (leaders + dissidents)
+# DISSIDENT_FRAC: fraction of *informed* robots that are dissidents
+#
+# Example with defaults below (N=30, informed=50%, dissident share=33%):
+#   dissidents = 30 * 0.5 * 0.33 ≈ 5  (ids 0–4)
+#   leaders    = 30 * 0.5 - 5   = 10  (ids 5–14)
+#   uninformed = 15                    (ids 15–29)
+#
+# To vary dissident proportion while keeping informed count fixed:
+#   set INFORMED_FRAC=0.5, sweep DISSIDENT_FRAC over 0.0, 0.33, 0.5, 0.67, 1.0
 N_ROBOTS       = 30
-DISSIDENT_FRAC = 0  # 9/30 dissidents
+INFORMED_FRAC  = 0.5   # 50% of robots are informed
+DISSIDENT_FRAC = 0.33  # 33% of informed are dissidents
 
-# --- Goal priors (the only thing that differs between subgroups) ---
-# Majority: bottom-right  (-pi/4 = -45 deg)
+# --- Goal priors ---
+# Leaders → target A: bottom-right  (-pi/4 = -45 deg)
 GOAL_MODE    = 1
 GOAL_HEADING = -0.78539816339
 GOAL_WEIGHT  = 0.25
 
-# Dissidents: top-left  (3*pi/4 = 135 deg)
+# Dissidents → target B: top-left  (3*pi/4 = 135 deg)
 DISS_GOAL_MODE    = 1
 DISS_GOAL_HEADING = 2.35619449019
 DISS_GOAL_WEIGHT  = 0.25

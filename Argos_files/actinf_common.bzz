@@ -74,7 +74,7 @@ function poslog_tick() {
   var y = pose.position.y
   var yaw = pose.orientation.yaw
   io.fwrite(poslog_file,
-            poslog_step, ",", id, ",", ai_is_dissident, ",", x, ",", y, ",", yaw)
+            poslog_step, ",", id, ",", ai_role, ",", x, ",", y, ",", yaw)
   poslog_step = poslog_step + 1
 }
 
@@ -158,19 +158,32 @@ function actinf_init() {
     l = l + 1
   }
 
-  # Dissident selection (disabled by default)
-  # Use either:
-  #   DISSIDENT_FRAC in [0,1] with N_ROBOTS
-  # or:
-  #   DISSIDENT_COUNT directly
+  # Role assignment: 0=uninformed, 1=leader (goal A), 2=dissident (goal B)
+  #
+  # INFORMED_FRAC : fraction of N_ROBOTS that are informed (leaders + dissidents)
+  # DISSIDENT_FRAC: fraction of *informed* robots that are dissidents
+  #
+  # ID layout (lowest IDs first):
+  #   [0 .. dissident_count)          → dissident
+  #   [dissident_count .. informed_count) → leader
+  #   [informed_count .. N_ROBOTS)    → uninformed
   if(isnil(N_ROBOTS))        { N_ROBOTS = 30 }
+  if(isnil(INFORMED_FRAC))   { INFORMED_FRAC = 0.0 }
   if(isnil(DISSIDENT_FRAC))  { DISSIDENT_FRAC = 0.0 }
-  if(isnil(DISSIDENT_COUNT)) { DISSIDENT_COUNT = DISSIDENT_FRAC * N_ROBOTS }
 
-  ai_is_dissident = 0
-  if(DISSIDENT_COUNT > 0 and id < DISSIDENT_COUNT) {
-    ai_is_dissident = 1
+  var informed_count   = N_ROBOTS * INFORMED_FRAC
+  var dissident_count  = informed_count * DISSIDENT_FRAC
+
+  ai_role = 0
+  if(dissident_count > 0 and id < dissident_count) {
+    ai_role = 2
+  } else if(informed_count > 0 and id < informed_count) {
+    ai_role = 1
   }
+
+  # Keep legacy alias so old code that reads ai_is_dissident still works.
+  ai_is_dissident = 0
+  if(ai_role == 2) { ai_is_dissident = 1 }
 
   # Initial heading: spread agents evenly by id to avoid symmetry
   var ang = (id % 50) * TWO_PI / 50.0
@@ -182,14 +195,26 @@ function actinf_init() {
 function actinf_step() {
   var dt = 0.1  # seconds per tick (ticks_per_second = 10)
 
+  # ai_vel is a GLOBAL-FRAME direction vector (matches Julia reference).
+  # dFdv is computed in global frame by rotating body-frame RAB azimuths by +yaw.
+  # Steering: ang = wrap_pi(desired_global_heading - current_yaw).
+  var yaw = 0.0
+  var cy  = 1.0
+  var sy  = 0.0
+  if(not isnil(pose)) {
+    yaw = pose.orientation.yaw
+    cy  = math.cos(yaw)
+    sy  = math.sin(yaw)
+  }
+
   # -------------------------------------------------------------------------
   # 1) Build sector-wise observations (φ0 = y, φ1 = y')
-  #    and the geometric term dh/dr_self (matches Julia's dh_dr_self).
+  #    and dh/dv in GLOBAL frame: rotate body-frame unit vectors by +yaw.
   # -------------------------------------------------------------------------
-  var y_sum = {}
+  var y_sum  = {}
   var ux_sum = {}
   var uy_sum = {}
-  var cnt = {}
+  var cnt    = {}
 
   var l = 0
   while(l < L) {
@@ -205,36 +230,30 @@ function actinf_step() {
       var az  = wrap_pi(data.azimuth)
       var sec = sector_of(az)
       if(sec >= 0) {
+        var caz = math.cos(az)
+        var saz = math.sin(az)
         y_sum[sec]  = y_sum[sec]  + data.distance
-        ux_sum[sec] = ux_sum[sec] + math.cos(az)
-        uy_sum[sec] = uy_sum[sec] + math.sin(az)
+        ux_sum[sec] = ux_sum[sec] + (caz * cy - saz * sy)
+        uy_sum[sec] = uy_sum[sec] + (caz * sy + saz * cy)
         cnt[sec]    = cnt[sec] + 1
       }
     }
   })
 
-  var y  = {}
-  var y1 = {}
-  var dhx = {}  # dh/dr_self x
-  var dhy = {}  # dh/dr_self y
+  var y   = {}
+  var y1  = {}
+  var dhx = {}
+  var dhy = {}
 
   l = 0
   while(l < L) {
     if(cnt[l] > 0) {
       var k = cnt[l]
-      y[l]  = y_sum[l] / k
-
-      # mean unit vector pointing to neighbors
-      var mx = ux_sum[l] / k
-      var my = uy_sum[l] / k
-
-      # Julia: dh_dr_self = -mean(unit_vectors)
-      dhx[l] = -mx
-      dhy[l] = -my
+      y[l]   = y_sum[l] / k
+      dhx[l] = -(ux_sum[l] / k)
+      dhy[l] = -(uy_sum[l] / k)
     } else {
-      # Julia uses 0 observations for empty sectors and explicitly nullifies
-      # their prediction errors.
-      y[l]  = 0.0
+      y[l]   = 0.0
       dhx[l] = 0.0
       dhy[l] = 0.0
     }
@@ -364,38 +383,29 @@ function actinf_step() {
   var w = 0.0
   var g = math.vec2.new(0.0, 0.0)
 
-  if(ai_is_dissident == 1) {
+  if(ai_role == 2) {
+    # Dissident: goal toward target B
     w = DISS_GOAL_WEIGHT
     if(w > 0.0 and DISS_GOAL_MODE != 0) {
       g = compute_goal_vec(DISS_GOAL_MODE, DISS_GOAL_HEADING, DISS_GOAL_X, DISS_GOAL_Y)
     }
-  } else {
+  } else if(ai_role == 1) {
+    # Leader: goal toward target A
     w = GOAL_WEIGHT
     if(w > 0.0 and GOAL_MODE != 0) {
       g = compute_goal_vec(GOAL_MODE, GOAL_HEADING, GOAL_X, GOAL_Y)
     }
   }
+  # ai_role == 0 (uninformed): w stays 0.0, no goal bias
 
   if(w > 0.0 and (g.x != 0.0 or g.y != 0.0)) {
-    # g is in global frame; ai_vel is in robot body frame (built from RAB
-    # azimuths).  Rotate g into body frame before adding, otherwise a fixed
-    # global direction becomes a fixed turn-preference -> circular motion.
-    if(not isnil(pose)) {
-      var yaw = pose.orientation.yaw
-      var cy = math.cos(-yaw)
-      var sy = math.sin(-yaw)
-      g = math.vec2.new(g.x * cy - g.y * sy, g.x * sy + g.y * cy)
-    }
+    # ai_vel is global-frame; g is also global-frame — add directly.
     ai_vel = vec2_norm_safe(math.vec2.add(ai_vel, math.vec2.scale(g, w)))
   }
 
-  # Convert desired direction into a bounded turn command.
-  # Without this, a sideways/backwards desired vector can trigger hard-turn
-  # mode in the differential drive controller -> spinning in place.
-  var ang = math.atan(ai_vel.y, ai_vel.x)
+  # Steering: convert global desired heading to body-frame turn angle.
+  var ang = wrap_pi(math.atan(ai_vel.y, ai_vel.x) - yaw)
 
-  # TURN_GAIN scales turning authority; lowering it helps avoid perfect circles
-  # (constant-curvature limit cycles) in the polarized preset.
   if(isnil(TURN_GAIN)) { TURN_GAIN = 1.0 }
   ang = ang * TURN_GAIN
 
@@ -403,7 +413,6 @@ function actinf_step() {
   if(ang >  MAX_TURN) { ang =  MAX_TURN }
   if(ang < -MAX_TURN) { ang = -MAX_TURN }
 
-  # Command constant forward speed with limited turning (polar goto).
   gotop(SPEED, ang)
 }
 

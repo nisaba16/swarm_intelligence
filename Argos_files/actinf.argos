@@ -29,7 +29,7 @@
   <!--
     Arena: 10 x 10 m.
     rab_range = 80 cm = 0.8 m (matches R0 in actinf.bzz).
-    N = 30 agents.
+    N = 50 agents.
   -->
   <arena size="10, 10, 1" center="0,0,0.5">
     <box id="wall_north" size="9,0.1,0.5" movable="false">
@@ -46,10 +46,9 @@
     </box>
 
     <distribute>
-      <!-- Spawn closer together so robots immediately perceive neighbors -->
-      <!-- Spawn in 1x1m cluster so all robots start within RAB range (1.2m).
-           Spawn box < R0 = 0.8m so all agents start within sensing range. -->
-      <position method="uniform" min="-0.5,-0.5,0" max="0.5,0.5,0" />
+      <!-- 2x2m spawn gives enough room for 50 robots (Khepera IV ~14cm wide).
+           Density is high enough that all robots start with neighbors in RAB range. -->
+      <position method="uniform" min="-0.3,-0.3,0" max="0.3,0.3,0" />
       <orientation method="gaussian" mean="0,0,0" std_dev="360,0,0" />
       <entity quantity="30" max_trials="1000">
         <kheperaiv id="kiv" rab_data_size="50" rab_range="80">

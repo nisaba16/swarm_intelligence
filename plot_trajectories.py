@@ -45,7 +45,7 @@ def _parse_extent(
 class LogPoint:
     step: int
     rid: int
-    role: int   # 0 = majority, 1 = dissident
+    role: int   # 0 = uninformed, 1 = leader, 2 = dissident
     x: float
     y: float
     yaw: float
@@ -209,12 +209,18 @@ def plot_final(
     fig, ax = plt.subplots(figsize=(figsize, figsize), dpi=dpi)
 
     if has_roles:
-        maj = [p for p in pts if p.role == 0]
-        dis = [p for p in pts if p.role == 1]
-        ax.scatter([p.x for p in maj], [p.y for p in maj],
-                   s=18, color="steelblue", label="majority", alpha=0.9, zorder=3)
-        ax.scatter([p.x for p in dis], [p.y for p in dis],
-                   s=18, color="tomato", label="dissident", alpha=0.9, zorder=3)
+        uninf = [p for p in pts if p.role == 0]
+        lead  = [p for p in pts if p.role == 1]
+        dis   = [p for p in pts if p.role == 2]
+        if uninf:
+            ax.scatter([p.x for p in uninf], [p.y for p in uninf],
+                       s=18, color="gray",    label="uninformed", alpha=0.7, zorder=3)
+        if lead:
+            ax.scatter([p.x for p in lead], [p.y for p in lead],
+                       s=18, color="steelblue", label="leader",  alpha=0.9, zorder=3)
+        if dis:
+            ax.scatter([p.x for p in dis], [p.y for p in dis],
+                       s=18, color="tomato",  label="dissident", alpha=0.9, zorder=3)
         ax.legend(loc="upper right", fontsize=8)
     else:
         ax.scatter([p.x for p in pts], [p.y for p in pts],
@@ -262,15 +268,18 @@ def animate(
     xmin, xmax, ymin, ymax = extent
     fig, ax = plt.subplots(figsize=(figsize, figsize), dpi=dpi)
 
-    COLOR_MAJ  = "#3a86ff"
-    COLOR_DISS = "#ff3a3a"
+    COLOR_UNINF = "#aaaaaa"
+    COLOR_LEAD  = "#3a86ff"
+    COLOR_DISS  = "#ff3a3a"
 
     if has_roles:
-        scat_maj = ax.scatter([], [], s=14, color=COLOR_MAJ,  zorder=3, label="majority")
-        scat_dis = ax.scatter([], [], s=14, color=COLOR_DISS, zorder=3, label="dissident")
+        scat_uninf = ax.scatter([], [], s=10, color=COLOR_UNINF, zorder=2, label="uninformed")
+        scat_maj   = ax.scatter([], [], s=14, color=COLOR_LEAD,  zorder=3, label="leader")
+        scat_dis   = ax.scatter([], [], s=14, color=COLOR_DISS,  zorder=3, label="dissident")
     else:
-        scat_maj = ax.scatter([], [], s=10, color=COLOR_MAJ, zorder=3)
-        scat_dis = None
+        scat_uninf = None
+        scat_maj   = ax.scatter([], [], s=10, color=COLOR_LEAD, zorder=3)
+        scat_dis   = None
 
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
@@ -289,7 +298,7 @@ def animate(
         ax.annotate("", xy=(cx + arrow_r * math.cos(goal_heading),
                             cy + arrow_r * math.sin(goal_heading)),
                     xytext=(cx, cy),
-                    arrowprops=dict(arrowstyle="-|>", color=COLOR_MAJ, lw=2))
+                    arrowprops=dict(arrowstyle="-|>", color=COLOR_LEAD, lw=2))
     if diss_goal_heading is not None:
         ax.annotate("", xy=(cx + arrow_r * math.cos(diss_goal_heading),
                             cy + arrow_r * math.sin(diss_goal_heading)),
@@ -298,8 +307,9 @@ def animate(
 
     if has_roles:
         handles = [
-            mpatches.Patch(color=COLOR_MAJ,  label="majority"),
-            mpatches.Patch(color=COLOR_DISS, label="dissident"),
+            mpatches.Patch(color=COLOR_UNINF, label="uninformed"),
+            mpatches.Patch(color=COLOR_LEAD,  label="leader"),
+            mpatches.Patch(color=COLOR_DISS,  label="dissident"),
         ]
         ax.legend(handles=handles, loc="upper right", fontsize=8)
 
@@ -307,26 +317,36 @@ def animate(
 
     def init():
         scat_maj.set_offsets(np.zeros((0, 2)))
+        if scat_uninf is not None:
+            scat_uninf.set_offsets(np.zeros((0, 2)))
         if scat_dis is not None:
             scat_dis.set_offsets(np.zeros((0, 2)))
-        return (scat_maj,) + ((scat_dis,) if scat_dis else ())
+        return (scat_maj,) + ((scat_uninf,) if scat_uninf else ()) + ((scat_dis,) if scat_dis else ())
 
     def update(i: int):
         step = steps[i]
         frame_pts = by_step.get(step, [])
-        maj_pts = [p for p in frame_pts if p.role == 0]
-        dis_pts = [p for p in frame_pts if p.role == 1]
+        uninf_pts = [p for p in frame_pts if p.role == 0]
+        lead_pts  = [p for p in frame_pts if p.role == 1]
+        dis_pts   = [p for p in frame_pts if p.role == 2]
+        # When no roles are present all points are uninformed — draw them all.
+        draw_maj = lead_pts if has_roles else frame_pts
         scat_maj.set_offsets(
-            np.c_[[p.x for p in maj_pts], [p.y for p in maj_pts]]
-            if maj_pts else np.zeros((0, 2))
+            np.c_[[p.x for p in draw_maj], [p.y for p in draw_maj]]
+            if draw_maj else np.zeros((0, 2))
         )
+        if scat_uninf is not None:
+            scat_uninf.set_offsets(
+                np.c_[[p.x for p in uninf_pts], [p.y for p in uninf_pts]]
+                if uninf_pts else np.zeros((0, 2))
+            )
         if scat_dis is not None:
             scat_dis.set_offsets(
                 np.c_[[p.x for p in dis_pts], [p.y for p in dis_pts]]
                 if dis_pts else np.zeros((0, 2))
             )
         title_obj.set_text(f"step={step}  ({i+1}/{len(steps)})")
-        return (scat_maj,) + ((scat_dis,) if scat_dis else ()) + (title_obj,)
+        return (scat_maj,) + ((scat_uninf,) if scat_uninf else ()) + ((scat_dis,) if scat_dis else ()) + (title_obj,)
 
     anim = FuncAnimation(fig, update, frames=len(steps),
                          init_func=init, interval=1000 / max(fps, 1), blit=True)
