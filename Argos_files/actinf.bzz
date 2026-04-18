@@ -62,24 +62,26 @@ if(PRESET == 0) {
 
 else if(PRESET == 1) {
   # Milling — center of Fig 2B.
+  # N=60, spawn ±1.0m (set in actinf.argos).
+  #
   # SIGMA_Z = 1.5  → Γ_z ≈ 0.67, log(Γ_z) ≈ −0.4  (paper value)
   # S_Z     = 1.0  → λ_z = 1.0                      (paper value)
-  # NOISE_ANG = σ_a dW from paper SDE; breaks rotational symmetry so
-  #   milling can emerge from random initial headings (global-frame,
-  #   no special seeding).  Pure global-frame deterministic dynamics
-  #   cannot transition from polarized to milling because the action
-  #   gradient is purely radial — angular momentum is conserved.
-  SIGMA_Z   = 2.5
+  # ALPHA   = 1.0  → underdamped distance oscillations (needed for milling)
+  # KA      = 1.0  → strong enough action to lock orbit once seeded by noise
+  # NOISE_ANG = 0.15 → paper-scale σ_a dW in discrete time:
+  #   paper uses dt≈0.01s, we use dt=0.1s, same diffusion D=σ²/2 requires
+  #   σ_discrete = σ_paper × √(0.1/0.01) ≈ σ_paper × 3.16
+  SIGMA_Z   = 1.5
   SIGMA_W   = 1.0
   S_Z       = 1.0
   S_W       = 1.0
-  ALPHA     = 3.0
+  ALPHA     = 1.0
   SPEED     = 4.0
   KMU       = 0.1
-  KA        = 0.5   # larger KA so action signal matches noise magnitude
+  KA        = 1.0
   MAX_TURN  = 1.0
   TURN_GAIN = 1.0
-  NOISE_ANG = 0.02   # uniform(±0.02) → std_dev≈0.012 rad/tick ≈ social signal scale
+  NOISE_ANG = 0.15
 }
 
 else if(PRESET == 2) {

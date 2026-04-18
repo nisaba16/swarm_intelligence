@@ -241,6 +241,23 @@ def plot_final(
 # Animation
 # ---------------------------------------------------------------------------
 
+def _follow_center(
+    pts: List[LogPoint],
+    follow_n: Optional[int],
+) -> Tuple[float, float]:
+    """Centroid of all robots, or of the follow_n closest to the initial centroid."""
+    if not pts:
+        return 0.0, 0.0
+    xs = np.array([p.x for p in pts], dtype=float)
+    ys = np.array([p.y for p in pts], dtype=float)
+    cx, cy = xs.mean(), ys.mean()
+    if follow_n is None or follow_n >= len(pts):
+        return float(cx), float(cy)
+    dists = np.hypot(xs - cx, ys - cy)
+    idx = np.argsort(dists)[:follow_n]
+    return float(xs[idx].mean()), float(ys[idx].mean())
+
+
 def animate(
     points: List[LogPoint],
     extent: Tuple[float, float, float, float],
@@ -251,7 +268,17 @@ def animate(
     figsize: float,
     goal_heading: Optional[float] = None,
     diss_goal_heading: Optional[float] = None,
+    view: str = "arena",
+    follow_radius: float = 5.0,
+    follow_n: Optional[int] = None,
 ) -> None:
+    """
+    view modes:
+      'arena'  — fixed window from --extent / --arena-size (default).
+      'follow' — camera tracks the swarm centroid; window half-width = follow_radius.
+                 follow_n: if set, track centroid of the N closest robots only
+                 (useful to ignore scattered outliers).
+    """
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
     from matplotlib.animation import FuncAnimation
@@ -264,6 +291,7 @@ def animate(
         steps = steps[::stride]
 
     has_roles = any(p.role != 0 for p in points)
+    following  = (view == "follow")
 
     xmin, xmax, ymin, ymax = extent
     fig, ax = plt.subplots(figsize=(figsize, figsize), dpi=dpi)
@@ -272,13 +300,21 @@ def animate(
     COLOR_LEAD  = "#3a86ff"
     COLOR_DISS  = "#ff3a3a"
 
+    # Adaptive dot size: render robots at ~3× Khepera IV body diameter (14 cm)
+    # so they are visible regardless of follow_radius or arena_size.
+    # matplotlib scatter s = area in points².  1 point = figsize*72 / window_m metres.
+    window_m   = 2 * follow_radius if following else max(xmax - xmin, ymax - ymin)
+    pts_per_m  = figsize * 72 / window_m
+    dot        = int((3.0 * 0.14 * pts_per_m) ** 2)   # 3× robot diameter
+    dot        = max(dot, 8)                           # floor so arena view isn't invisible
+
     if has_roles:
-        scat_uninf = ax.scatter([], [], s=10, color=COLOR_UNINF, zorder=2, label="uninformed")
-        scat_maj   = ax.scatter([], [], s=14, color=COLOR_LEAD,  zorder=3, label="leader")
-        scat_dis   = ax.scatter([], [], s=14, color=COLOR_DISS,  zorder=3, label="dissident")
+        scat_uninf = ax.scatter([], [], s=dot,     color=COLOR_UNINF, zorder=2, label="uninformed")
+        scat_maj   = ax.scatter([], [], s=dot,     color=COLOR_LEAD,  zorder=3, label="leader")
+        scat_dis   = ax.scatter([], [], s=dot,     color=COLOR_DISS,  zorder=3, label="dissident")
     else:
         scat_uninf = None
-        scat_maj   = ax.scatter([], [], s=10, color=COLOR_LEAD, zorder=3)
+        scat_maj   = ax.scatter([], [], s=dot, color=COLOR_LEAD, zorder=3)
         scat_dis   = None
 
     ax.set_xlim(xmin, xmax)
@@ -289,21 +325,20 @@ def animate(
     ax.set_facecolor("white")
     fig.patch.set_facecolor("white")
 
-    # Draw goal direction arrows in the corner
-    arrow_kw = dict(width=0.04, head_width=0.18, head_length=0.14,
-                    length_includes_head=True, transform=ax.transData)
-    cx, cy = (xmin + xmax) / 2, (ymin + ymax) / 2
-    arrow_r = (xmax - xmin) * 0.35
-    if goal_heading is not None:
-        ax.annotate("", xy=(cx + arrow_r * math.cos(goal_heading),
-                            cy + arrow_r * math.sin(goal_heading)),
-                    xytext=(cx, cy),
-                    arrowprops=dict(arrowstyle="-|>", color=COLOR_LEAD, lw=2))
-    if diss_goal_heading is not None:
-        ax.annotate("", xy=(cx + arrow_r * math.cos(diss_goal_heading),
-                            cy + arrow_r * math.sin(diss_goal_heading)),
-                    xytext=(cx, cy),
-                    arrowprops=dict(arrowstyle="-|>", color=COLOR_DISS, lw=2))
+    if not following:
+        # Static goal arrows centered in the fixed window
+        acx, acy = (xmin + xmax) / 2, (ymin + ymax) / 2
+        arrow_r  = (xmax - xmin) * 0.35
+        if goal_heading is not None:
+            ax.annotate("", xy=(acx + arrow_r * math.cos(goal_heading),
+                                acy + arrow_r * math.sin(goal_heading)),
+                        xytext=(acx, acy),
+                        arrowprops=dict(arrowstyle="-|>", color=COLOR_LEAD, lw=2))
+        if diss_goal_heading is not None:
+            ax.annotate("", xy=(acx + arrow_r * math.cos(diss_goal_heading),
+                                acy + arrow_r * math.sin(diss_goal_heading)),
+                        xytext=(acx, acy),
+                        arrowprops=dict(arrowstyle="-|>", color=COLOR_DISS, lw=2))
 
     if has_roles:
         handles = [
@@ -315,6 +350,12 @@ def animate(
 
     title_obj = ax.set_title("")
 
+    def _set_offsets(scat, pts_list):
+        if pts_list:
+            scat.set_offsets(np.c_[[p.x for p in pts_list], [p.y for p in pts_list]])
+        else:
+            scat.set_offsets(np.zeros((0, 2)))
+
     def init():
         scat_maj.set_offsets(np.zeros((0, 2)))
         if scat_uninf is not None:
@@ -324,32 +365,38 @@ def animate(
         return (scat_maj,) + ((scat_uninf,) if scat_uninf else ()) + ((scat_dis,) if scat_dis else ())
 
     def update(i: int):
-        step = steps[i]
-        frame_pts = by_step.get(step, [])
-        uninf_pts = [p for p in frame_pts if p.role == 0]
-        lead_pts  = [p for p in frame_pts if p.role == 1]
-        dis_pts   = [p for p in frame_pts if p.role == 2]
-        # When no roles are present all points are uninformed — draw them all.
-        draw_maj = lead_pts if has_roles else frame_pts
-        scat_maj.set_offsets(
-            np.c_[[p.x for p in draw_maj], [p.y for p in draw_maj]]
-            if draw_maj else np.zeros((0, 2))
-        )
-        if scat_uninf is not None:
-            scat_uninf.set_offsets(
-                np.c_[[p.x for p in uninf_pts], [p.y for p in uninf_pts]]
-                if uninf_pts else np.zeros((0, 2))
-            )
-        if scat_dis is not None:
-            scat_dis.set_offsets(
-                np.c_[[p.x for p in dis_pts], [p.y for p in dis_pts]]
-                if dis_pts else np.zeros((0, 2))
-            )
-        title_obj.set_text(f"step={step}  ({i+1}/{len(steps)})")
-        return (scat_maj,) + ((scat_uninf,) if scat_uninf else ()) + ((scat_dis,) if scat_dis else ()) + (title_obj,)
+        step       = steps[i]
+        frame_pts  = by_step.get(step, [])
+        uninf_pts  = [p for p in frame_pts if p.role == 0]
+        lead_pts   = [p for p in frame_pts if p.role == 1]
+        dis_pts    = [p for p in frame_pts if p.role == 2]
+        draw_maj   = lead_pts if has_roles else frame_pts
 
+        _set_offsets(scat_maj, draw_maj)
+        if scat_uninf is not None:
+            _set_offsets(scat_uninf, uninf_pts)
+        if scat_dis is not None:
+            _set_offsets(scat_dis, dis_pts)
+
+        if following and frame_pts:
+            fcx, fcy = _follow_center(frame_pts, follow_n)
+            r = follow_radius
+            ax.set_xlim(fcx - r, fcx + r)
+            ax.set_ylim(fcy - r, fcy + r)   # square window → no aspect conflict
+
+        title_obj.set_text(f"step={step}  ({i+1}/{len(steps)})"
+                           + (f"  [follow r={follow_radius}m"
+                              + (f" n={follow_n}" if follow_n else "") + "]"
+                              if following else ""))
+        artists = (scat_maj,) + ((scat_uninf,) if scat_uninf else ()) \
+                              + ((scat_dis,)   if scat_dis   else ()) \
+                              + (title_obj,)
+        return artists
+
+    # blit=False required for follow mode (axis limits change each frame)
     anim = FuncAnimation(fig, update, frames=len(steps),
-                         init_func=init, interval=1000 / max(fps, 1), blit=True)
+                         init_func=init, interval=1000 / max(fps, 1),
+                         blit=not following)
     ext = os.path.splitext(out)[1].lower()
     if ext == ".gif":
         anim.save(out, writer="pillow", fps=fps)
@@ -497,6 +544,13 @@ def main() -> int:
                     help="Majority goal heading in radians (draws arrow in animation)")
     ap.add_argument("--diss-goal-heading", type=float, default=None,
                     help="Dissident goal heading in radians (draws arrow in animation)")
+    # Camera / view mode
+    ap.add_argument("--view", choices=["arena", "follow"], default="arena",
+                    help="arena=fixed window (default), follow=track swarm centroid")
+    ap.add_argument("--follow-radius", type=float, default=5.0,
+                    help="Half-width of follow window in metres (--view follow)")
+    ap.add_argument("--follow-n", type=int, default=None,
+                    help="Track centroid of the N closest robots; omit to use all")
     args = ap.parse_args()
 
     extent = _parse_extent(args.extent, args.arena_size, args.center_radius)
@@ -532,7 +586,10 @@ def main() -> int:
             animate(points, extent=extent, out=out, fps=args.fps,
                     stride=args.stride, dpi=args.dpi, figsize=args.figsize,
                     goal_heading=args.goal_heading,
-                    diss_goal_heading=args.diss_goal_heading)
+                    diss_goal_heading=args.diss_goal_heading,
+                    view=args.view,
+                    follow_radius=args.follow_radius,
+                    follow_n=args.follow_n)
         else:
             steps, pol, mil, n_used = compute_order_parameters(points)
             if steps.size == 0:

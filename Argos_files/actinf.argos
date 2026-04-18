@@ -52,7 +52,7 @@
       <!-- Spawn in 2x2m cluster — all robots start within RAB range (3.0m). -->
       <position method="uniform" min="-1.0,-1.0,0" max="1.0,1.0,0" />
       <orientation method="gaussian" mean="0,0,0" std_dev="360,0,0" />
-      <entity quantity="30" max_trials="1000">
+      <entity quantity="60" max_trials="1000">
         <kheperaiv id="kiv" rab_data_size="50" rab_range="300">
           <controller config="actinf" />
         </kheperaiv>
