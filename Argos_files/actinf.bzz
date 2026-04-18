@@ -8,7 +8,7 @@
 #   bzzc -I . -b actinf.bo -d actinf.bdb actinf.bzz
 # then run actinf.argos.
 
-PRESET = 1
+PRESET = 0
 
 # --- Shared geometry / environment ---
 # Scaled up so robot body (14 cm) is negligible relative to interaction range.
@@ -82,7 +82,7 @@ else if(PRESET == 1) {
   MAX_TURN  = 1.0
   TURN_GAIN = 1.0
   NOISE_ANG  = 0.02
-  INIT_MODE  = 1
+  INIT_MODE  = 0
   # Small CCW bias — natural solo radius = SPEED/(OMEGA_BIAS/dt) = 4/0.1 = 40 cm ≈ ETA.
   # Social force then phase-locks all robots into a collective orbit.
   OMEGA_BIAS = 0.01
