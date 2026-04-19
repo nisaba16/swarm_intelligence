@@ -23,13 +23,14 @@
       </sensors>
       <params bytecode_file="actinf_dissident.bo"
               debug_file="actinf_dissident.bdb" />
+      <wheel_turning max_speed="100" />
     </buzz_controller_kheperaiv>
   </controllers>
 
   <!--
-    Identical arena to actinf.argos (30x30 m, rab_range=300 cm=3 m, N=60,
-    spawn ±1 m) so the milling parameters carry over unchanged.
-    Only the controller bytecode differs (actinf_dissident.bo).
+    Arena identical to actinf.argos: 30x30m, rab_range=500cm=5m, N=40, spawn ±2.5m.
+    avg spacing ≈ ETA=1m → minimal flow-prior repulsion at init.
+    Ring attractor radius = 40/(2π) ≈ 6.4m, well inside walls.
   -->
   <arena size="30, 30, 1" center="0,0,0.5">
     <box id="wall_north" size="29,0.1,0.5" movable="false">
@@ -46,11 +47,10 @@
     </box>
 
     <distribute>
-      <!-- Spawn in 2x2 m cluster — all robots start within RAB range (3.0 m). -->
-      <position method="uniform" min="-1.0,-1.0,0" max="1.0,1.0,0" />
+      <position method="uniform" min="-2.5,-2.5,0" max="2.5,2.5,0" />
       <orientation method="gaussian" mean="0,0,0" std_dev="360,0,0" />
-      <entity quantity="60" max_trials="1000">
-        <kheperaiv id="kiv" rab_data_size="50" rab_range="300">
+      <entity quantity="40" max_trials="1000">
+        <kheperaiv id="kiv" rab_data_size="20" rab_range="500">
           <controller config="actinf_dissident" />
         </kheperaiv>
       </entity>

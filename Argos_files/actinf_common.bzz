@@ -167,7 +167,7 @@ function actinf_init() {
   #   [0 .. dissident_count)          → dissident
   #   [dissident_count .. informed_count) → leader
   #   [informed_count .. N_ROBOTS)    → uninformed
-  if(isnil(N_ROBOTS))        { N_ROBOTS = 30 }
+  if(isnil(N_ROBOTS))        { N_ROBOTS = 50 }
   if(isnil(INFORMED_FRAC))   { INFORMED_FRAC = 0.0 }
   if(isnil(DISSIDENT_FRAC))  { DISSIDENT_FRAC = 0.0 }
 
@@ -192,10 +192,14 @@ function actinf_init() {
   if(isnil(INIT_MODE)) { INIT_MODE = 0 }
 
   # INIT_MODE 0: random heading (uniform over [0, 2π]) — default.
-  # INIT_MODE 1: tangential CCW relative to spawn position.
+  # INIT_MODE 1: tangential CCW relative to spawn position — seeds milling.
   #   Each robot faces perpendicular to its position vector from the origin
   #   (= (-y/r, x/r)), seeding a counterclockwise orbit so the milling
   #   attractor can be reached without continuous-time SDE noise levels.
+  # INIT_MODE 2: aligned heading — seeds polarized motion.
+  #   All robots start pointing east (+ small ±0.1 rad jitter so they are
+  #   not perfectly identical). The polarized attractor then reinforces
+  #   alignment within a few dozen ticks.
   if(INIT_MODE == 1) {
     if(not isnil(pose)) {
       var px = pose.position.x
@@ -209,6 +213,9 @@ function actinf_init() {
     } else {
       ai_vel = math.vec2.new(1.0, 0.0)
     }
+  } else if(INIT_MODE == 2) {
+    var jitter = math.rng.uniform(-0.1, 0.1)
+    ai_vel = math.vec2.new(math.cos(jitter), math.sin(jitter))
   } else {
     var init_ang = math.rng.uniform(0.0, TWO_PI)
     ai_vel = math.vec2.new(math.cos(init_ang), math.sin(init_ang))
@@ -250,14 +257,17 @@ function actinf_step() {
     l = l + 1
   }
 
+  # ARGoS RAB sensor returns data.distance in CENTIMETRES; convert to metres here
+  # so all downstream code (y, y1, ETA, R0, Z_ACTION, Z_GP) stays in SI units.
   neighbors.foreach(function(rid, data) {
-    if(data.distance <= R0) {
+    var dist_m = data.distance / 100.0
+    if(dist_m <= R0) {
       var az  = wrap_pi(data.azimuth)
       var sec = sector_of(az)
       if(sec >= 0) {
         var caz = math.cos(az)
         var saz = math.sin(az)
-        y_sum[sec]  = y_sum[sec]  + data.distance
+        y_sum[sec]  = y_sum[sec]  + dist_m
         ux_sum[sec] = ux_sum[sec] + (caz * cy - saz * sy)
         uy_sum[sec] = uy_sum[sec] + (caz * sy + saz * cy)
         cnt[sec]    = cnt[sec] + 1
@@ -285,10 +295,13 @@ function actinf_step() {
     l = l + 1
   }
 
+  # --- y1 from CLEAN y (before Z_ACTION) -----------------------------------
+  # CRITICAL: y1 must be computed from unperturbed y.  If Z_ACTION noise were
+  # applied first, y1 = (noisy_y[t] - noisy_y[t-1]) / dt would amplify the
+  # noise by 1/dt = 10×, producing y1-noise ≈ √2 × 0.13 / 0.1 ≈ 1.84 m/s,
+  # which swamps the actual velocity signal (O(SPEED) = O(0.1 m/s)).
   if(ai_first == 1) {
-    # First tick: initialise μ0 from actual observed distance instead of ETA.
-    # This zeroes the initial prediction error so the flow prior drifts robots
-    # toward ETA gently, with no repulsion shock from starting too close.
+    # First tick: seed μ0 from observed distance; y1=0 (no prior sample).
     l = 0
     while(l < L) {
       y1[l] = 0.0
@@ -305,8 +318,41 @@ function actinf_step() {
       } else {
         y1[l] = (y[l] - ai_yprev[l]) / dt
       }
-      ai_yprev[l] = y[l]
+      ai_yprev[l] = y[l]   # store CLEAN y for next tick
       l = l + 1
+    }
+  }
+
+  # Positional noise on y (distance observation only, NOT y').
+  # Applied AFTER y1 is computed so it does not amplify into the velocity channel.
+  # Julia value: z_action=0.04 at dt=0.01 s.
+  # Scaled to dt=0.1 s: Z_ACTION = 0.04 * sqrt(0.1/0.01) ≈ 0.13 m.
+  if(isnil(Z_ACTION)) { Z_ACTION = 0.0 }
+  if(Z_ACTION > 0.0) {
+    var nx = math.rng.uniform(-Z_ACTION, Z_ACTION)
+    var ny = math.rng.uniform(-Z_ACTION, Z_ACTION)
+    var l2 = 0
+    while(l2 < L) {
+      if(y[l2] > 0.0) {
+        y[l2] = y[l2] + dhx[l2] * nx + dhy[l2] * ny
+        if(y[l2] < 0.0) { y[l2] = 0.0 }
+      }
+      l2 = l2 + 1
+    }
+  }
+
+  # Velocity observation noise — matches Julia z_gp applied to y' (h') observations.
+  # Paper: σz²',h increased from 0.01→0.05 for milling (variance of velocity fluctuations).
+  # Independent per sector, unlike Z_ACTION which is spatially correlated.
+  # Scaled to dt=0.1 s: Z_GP = z_gp * sqrt(dt_buzz/dt_julia) = z_gp * sqrt(10).
+  if(isnil(Z_GP)) { Z_GP = 0.0 }
+  if(Z_GP > 0.0) {
+    var l3 = 0
+    while(l3 < L) {
+      if(y[l3] > 0.0) {
+        y1[l3] = y1[l3] + math.rng.uniform(-Z_GP, Z_GP)
+      }
+      l3 = l3 + 1
     }
   }
 
@@ -388,31 +434,32 @@ function actinf_step() {
   # 3) Apply action update and (optionally) bias with a goal, then send motion
   # -------------------------------------------------------------------------
   ai_vel = math.vec2.sub(ai_vel, math.vec2.scale(dFdv, KA))
-  # Keep ai_vel as a unit direction vector; magnitude is handled by SPEED.
-  ai_vel = vec2_norm_safe(ai_vel)
 
-  # Action noise: σ_a dW, approximated as per-tick angular perturbation.
-  # This is the dW term from the continuous-time SDE (Heins 2023).
-  # It breaks rotational symmetry so milling can emerge from random IC.
-  # NOISE_ANG = 0 disables noise (polarized preset; no noise needed).
+  # ai_vel is a 2D velocity vector — NOT normalized.  Matching Julia's model:
+  #   v(t+1) = v(t) - κ_a × ∂F/∂v
+  # Keeping both components free gives the 2 DOF needed for the milling Hopf
+  # bifurcation (v_x and v_y evolve independently → complex eigenvalues possible).
+  # Normalization would collapse to 1 DOF (angle only) and kill the instability.
+  # Clamp magnitude to [0.1, 1.0] so the robot always moves at 10–100% of SPEED.
+  var ai_spd = math.vec2.length(ai_vel)
+  if(ai_spd > 1.0)  { ai_vel = math.vec2.scale(ai_vel, 1.0 / ai_spd) }
+  if(ai_spd < 0.1)  { ai_vel = math.vec2.scale(ai_vel, 0.1 / ai_spd) }
+
+  # Action noise: add angular perturbation, preserve magnitude.
+  if(isnil(NOISE_ANG)) { NOISE_ANG = 0.0 }
   if(NOISE_ANG > 0.0) {
-    # uniform(-NOISE_ANG, NOISE_ANG): std_dev = NOISE_ANG/sqrt(3) ≈ 0.58*NOISE_ANG.
-    # Using uniform (same API as HW10) to avoid ambiguity with gaussian's
-    # std_dev vs variance convention.
+    var spd_n = math.vec2.length(ai_vel)
     var noise = math.rng.uniform(-NOISE_ANG, NOISE_ANG)
     var nang  = math.atan(ai_vel.y, ai_vel.x) + noise
-    ai_vel    = math.vec2.new(math.cos(nang), math.sin(nang))
+    ai_vel    = math.vec2.new(math.cos(nang) * spd_n, math.sin(nang) * spd_n)
   }
 
-  # OMEGA_BIAS: constant angular rotation of ai_vel per tick (rad/tick, CCW > 0).
-  # Without this, INIT_MODE=1 robots follow tangent straight lines and the ring
-  # expands outward — ai_vel has no mechanism to track the orbital heading.
-  # With OMEGA_BIAS, ai_vel continuously rotates, maintaining circular orbit;
-  # the social distance force then locks in the ETA radius.
+  # OMEGA_BIAS: legacy angular rotation (preserve magnitude).
   if(isnil(OMEGA_BIAS)) { OMEGA_BIAS = 0.0 }
   if(OMEGA_BIAS != 0.0) {
-    var oang = math.atan(ai_vel.y, ai_vel.x) + OMEGA_BIAS
-    ai_vel = math.vec2.new(math.cos(oang), math.sin(oang))
+    var spd_o = math.vec2.length(ai_vel)
+    var oang  = math.atan(ai_vel.y, ai_vel.x) + OMEGA_BIAS
+    ai_vel    = math.vec2.new(math.cos(oang) * spd_o, math.sin(oang) * spd_o)
   }
 
   # Optional: goal bias (kept OFF by default so old experiments are unchanged)
@@ -451,11 +498,16 @@ function actinf_step() {
   # ai_role == 0 (uninformed): w stays 0.0, no goal bias
 
   if(w > 0.0 and (g.x != 0.0 or g.y != 0.0)) {
-    # ai_vel is global-frame; g is also global-frame — add directly.
-    ai_vel = vec2_norm_safe(math.vec2.add(ai_vel, math.vec2.scale(g, w)))
+    # Blend goal direction into ai_vel, preserving magnitude.
+    var spd_g = math.vec2.length(ai_vel)
+    var dir_g = vec2_norm_safe(math.vec2.add(ai_vel, math.vec2.scale(g, w)))
+    ai_vel = math.vec2.scale(dir_g, spd_g)
   }
 
-  # Steering: convert global desired heading to body-frame turn angle.
+  # Steering: heading from ai_vel direction; speed from ai_vel magnitude × SPEED.
+  # Variable speed is essential: it creates y1 differentials between robots
+  # (some faster, some slower → rates of distance change ≠ 0 → ε_z1 ≠ 0 → torque).
+  var act_spd = math.vec2.length(ai_vel)
   var ang = wrap_pi(math.atan(ai_vel.y, ai_vel.x) - yaw)
 
   if(isnil(TURN_GAIN)) { TURN_GAIN = 1.0 }
@@ -465,7 +517,26 @@ function actinf_step() {
   if(ang >  MAX_TURN) { ang =  MAX_TURN }
   if(ang < -MAX_TURN) { ang = -MAX_TURN }
 
-  gotop(SPEED, ang)
+  gotop(SPEED * act_spd, ang)
+
+  # Speed verification: only robot 0 logs actual measured speed every 10 ticks.
+  if(id == 0) { if(not isnil(pose)) {
+    if(isnil(spd_prev_x)) {
+      spd_prev_x = pose.position.x
+      spd_prev_y = pose.position.y
+      spd_tick   = 0
+    }
+    spd_tick = spd_tick + 1
+    if(spd_tick >= 10) {
+      var dx = pose.position.x - spd_prev_x
+      var dy = pose.position.y - spd_prev_y
+      var measured = math.sqrt(dx*dx + dy*dy) / (spd_tick * 0.1)
+      log("speed_check: measured=", measured, " m/s (", measured*100.0, " cm/s), cap=", SPEED, " cm/s")
+      spd_prev_x = pose.position.x
+      spd_prev_y = pose.position.y
+      spd_tick   = 0
+    }
+  } }
 }
 
 # ============= Standard Buzz hooks =============

@@ -23,16 +23,19 @@
       </sensors>
       <params bytecode_file="actinf.bo"
               debug_file="actinf.bdb" />
+      <wheel_turning max_speed="100" />
     </buzz_controller_kheperaiv>
   </controllers>
 
   <!--
-    Scaled-up arena to make 14 cm robot body negligible (Option 1).
-    Arena: 30 x 30 m.
-    rab_range = 300 cm = 3.0 m  (matches R0=3.0 in actinf.bzz).
-    Robot body 14 cm = 4.7% of R0 — effectively point-like.
-    N = 30 agents, spawned in a 2x2 m cluster (all within RAB range).
-    Camera raised to z=50 to see the full arena.
+    N=20 robots spawned in a ±2.5m square.
+    Key invariants:
+      avg spacing = sqrt(π×2.5²/20) ≈ 1.0m ≈ ETA → flow prior pe0 ≈ 0, no initial repulsion.
+      max pairwise distance = 2.5×√2×2 = 7.07m... wait, any two robots in ±2.5m:
+        max dist = sqrt((5)²+(5)²) = 7.07m > R0. But centre→corner = 3.54m < R0=5m,
+        so the cluster IS connected (each robot sees ≥half of others).
+      Ring attractor radius = N×ETA/(2π) = 20×1/(2π) ≈ 3.18m → well inside arena,
+        all ring-neighbors within R0=5m (ring spacing = ETA=1m << R0).
   -->
   <arena size="30, 30, 1" center="0,0,0.5">
     <box id="wall_north" size="29,0.1,0.5" movable="false">
@@ -49,11 +52,12 @@
     </box>
 
     <distribute>
-      <!-- Spawn in 2x2m cluster — all robots start within RAB range (3.0m). -->
-      <position method="uniform" min="-1.0,-1.0,0" max="1.0,1.0,0" />
+      <!-- ±2.5m spawn: avg spacing ≈ ETA=1m → near-zero initial flow prior repulsion.
+           Ring at 3.18m radius fits well inside 14.5m walls. -->
+      <position method="uniform" min="-2.5,-2.5,0" max="2.5,2.5,0" />
       <orientation method="gaussian" mean="0,0,0" std_dev="360,0,0" />
-      <entity quantity="60" max_trials="1000">
-        <kheperaiv id="kiv" rab_data_size="50" rab_range="300">
+      <entity quantity="64" max_trials="1000">
+        <kheperaiv id="kiv" rab_data_size="20" rab_range="500">
           <controller config="actinf" />
         </kheperaiv>
       </entity>
@@ -61,7 +65,7 @@
   </arena>
 
   <physics_engines>
-    <dynamics2d id="dyn2d" />
+    <dynamics2d id="dyn2d" iterations="1" />
   </physics_engines>
 
   <media>
