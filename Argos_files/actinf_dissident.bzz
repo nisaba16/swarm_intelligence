@@ -16,17 +16,9 @@
 L          = 6
 SECTOR_ANG = 1.04719755120   # PI/3 = 60 deg per sector
 SECTOR_OFF = -3.14159265359  # -PI  = full 360° coverage
-R0         = 5.0             # meters (matches rab_range=500cm in .argos)
+R0         = 3.0             # meters (matches rab_range=300cm in .argos)
 ETA        = 1.0             # meters
 
-# --- Active inference precision parameters — milling regime ---
-# actinf.bzz PRESET=1: S_Z=0.87 (Julia demo value), SIGMA_Z=1.0
-# → solidly in milling basin (Fig 2B: 1.0 < λ_z, log(Γ_z)=0)
-SIGMA_Z   = 1.0
-SIGMA_W   = 1.0
-S_Z       = 0.87
-S_W       = 1.0
-ALPHA     = 0.5
 
 # --- Motion parameters ---
 KMU       = 0.1
@@ -35,10 +27,35 @@ SPEED     = 10.0
 MAX_TURN  = 1.0
 TURN_GAIN = 1.0
 
-# --- Milling initialization ---
-INIT_MODE = 1
-Z_ACTION  = 0.13
-Z_GP      = 0.005
+PRESET = 0
+
+if(PRESET == 0){
+    # --- Active inference precision parameters — milling regime ---
+    # actinf.bzz PRESET=1: S_Z=0.87 (Julia demo value), SIGMA_Z=1.0
+    # → solidly in milling basin (Fig 2B: 1.0 < λ_z, log(Γ_z)=0)
+    SIGMA_Z   = 1.0
+    SIGMA_W   = 1.0
+    S_Z       = 0.87
+    S_W       = 1.0
+    ALPHA     = 0.5
+    # --- Milling initialization ---
+    INIT_MODE = 1
+    Z_ACTION  = 0.13
+    Z_GP      = 0.005
+}
+
+else if(PRESET == 1){
+  # disordered settings
+  SIGMA_Z  = 1.0
+  SIGMA_W  = 1.0
+  S_Z      = 2.0
+  S_W      = 1.0
+  ALPHA    = 0.1
+  ETA      = 0.5
+  INIT_MODE= 0
+  Z_ACTION = 0.13
+  Z_GP     = 0.032
+}
 
 # --- Logging ---
 LOG_POSITIONS = 1
@@ -59,8 +76,8 @@ LOG_DIR       = "logs"
 # To vary dissident proportion while keeping informed count fixed:
 #   set INFORMED_FRAC=0.5, sweep DISSIDENT_FRAC over 0.0, 0.33, 0.5, 0.67, 1.0
 N_ROBOTS       = 50
-INFORMED_FRAC  = 0.80  # x% of robots are informed
-DISSIDENT_FRAC = 0     # y% of informed are dissidents
+INFORMED_FRAC  = 0.60 # x% of robots are informed
+DISSIDENT_FRAC = 0.1  # y% of informed are dissidents
 
 # --- Goal priors ---
 # Leaders → target A: bottom-right  (-pi/4 = -45 deg)
