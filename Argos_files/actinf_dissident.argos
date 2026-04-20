@@ -50,7 +50,7 @@
       <position method="uniform" min="-2.5,-2.5,0" max="2.5,2.5,0" />
       <orientation method="gaussian" mean="0,0,0" std_dev="360,0,0" />
       <entity quantity="40" max_trials="1000">
-        <kheperaiv id="kiv" rab_data_size="20" rab_range="500">
+        <kheperaiv id="kiv" rab_data_size="20" rab_range="300">
           <controller config="actinf_dissident" />
         </kheperaiv>
       </entity>
