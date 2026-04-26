@@ -119,6 +119,14 @@ def select_window(
     return [p for p in points if lo <= p.step <= hi]
 
 
+def select_first_steps(points: List[LogPoint], n: Optional[int]) -> List[LogPoint]:
+    """Keep only the first n unique step values (chronological order)."""
+    if not n or n <= 0:
+        return points
+    cutoff = sorted(set(p.step for p in points))[:n][-1]
+    return [p for p in points if p.step <= cutoff]
+
+
 def select_tail(points: List[LogPoint], tail: Optional[int]) -> List[LogPoint]:
     if not tail or tail <= 0:
         return points
@@ -407,6 +415,104 @@ def animate(
 
 
 # ---------------------------------------------------------------------------
+# Multi-run trajectory grid
+# ---------------------------------------------------------------------------
+
+def plot_multi_traj(
+    logdirs: List[str],
+    extent: Tuple[float, float, float, float],
+    out: str,
+    title: str,
+    dpi: int,
+    panel_size: float,
+    run_labels: Optional[List[str]] = None,
+    first_steps: Optional[int] = None,
+) -> None:
+    """One subplot per logdir: full trajectory lines coloured by role."""
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    COLOR_UNINF = "#aaaaaa"
+    COLOR_LEAD  = "#3a86ff"
+    COLOR_DISS  = "#ff3a3a"
+    ALPHA_LINE  = 0.25
+    LW          = 0.6
+
+    n = len(logdirs)
+    ncols = min(n, 5)
+    nrows = math.ceil(n / ncols)
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(panel_size * ncols, panel_size * nrows),
+        dpi=dpi,
+        squeeze=False,
+    )
+
+    xmin, xmax, ymin, ymax = extent
+
+    for idx, logdir in enumerate(logdirs):
+        row, col = divmod(idx, ncols)
+        ax = axes[row][col]
+
+        try:
+            pts = read_logs(logdir)
+            pts = select_first_steps(pts, first_steps)
+        except (FileNotFoundError, ValueError) as e:
+            ax.text(0.5, 0.5, str(e), transform=ax.transAxes,
+                    ha="center", va="center", fontsize=6, color="red")
+            ax.set_title(run_labels[idx] if run_labels else os.path.basename(logdir))
+            continue
+
+        # group points by robot
+        by_robot: Dict[int, List[LogPoint]] = {}
+        for p in pts:
+            by_robot.setdefault(p.rid, []).append(p)
+
+        has_roles = any(p.role != 0 for p in pts)
+
+        for rid, robot_pts in by_robot.items():
+            robot_pts.sort(key=lambda p: p.step)
+            role = robot_pts[-1].role  # use final role (stable across steps)
+            xs = [p.x for p in robot_pts]
+            ys = [p.y for p in robot_pts]
+            color = (COLOR_LEAD if role == 1 else
+                     COLOR_DISS if role == 2 else COLOR_UNINF)
+            ax.plot(xs, ys, color=color, lw=LW, alpha=ALPHA_LINE, zorder=2)
+            # mark final position with a dot
+            ax.plot(xs[-1], ys[-1], "o", color=color,
+                    ms=2.5, alpha=0.8, zorder=3)
+
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_facecolor("white")
+        label = run_labels[idx] if run_labels else os.path.basename(os.path.abspath(logdir))
+        n_steps_shown = len(set(p.step for p in pts))
+        ax.set_title(f"{label}  ({n_steps_shown} frames)", fontsize=8)
+        ax.tick_params(labelsize=6)
+        ax.set_xlabel("x (m)", fontsize=6)
+        ax.set_ylabel("y (m)", fontsize=6)
+
+    # hide unused axes
+    for idx in range(n, nrows * ncols):
+        row, col = divmod(idx, ncols)
+        axes[row][col].set_visible(False)
+
+    # shared legend
+    handles = [mpatches.Patch(color=COLOR_UNINF, label="uninformed"),
+               mpatches.Patch(color=COLOR_LEAD,  label="leader"),
+               mpatches.Patch(color=COLOR_DISS,  label="dissident")]
+    fig.legend(handles=handles, loc="lower center", ncol=3,
+               fontsize=8, frameon=True,
+               bbox_to_anchor=(0.5, 0.0))
+
+    fig.suptitle(title, fontsize=10, y=1.01)
+    fig.tight_layout(rect=[0, 0.06, 1, 1])
+    fig.savefig(out, facecolor="white", bbox_inches="tight")
+    plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # Order parameters
 # ---------------------------------------------------------------------------
 
@@ -521,7 +627,14 @@ def plot_metrics(
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--logdir",       default="logs")
-    ap.add_argument("--mode",         choices=["heatmap", "final", "anim", "metrics"], default="heatmap")
+    ap.add_argument("--logdirs",      nargs="+", default=None,
+                    help="List of log directories for --mode multi (one per run)")
+    ap.add_argument("--run-labels",   nargs="+", default=None,
+                    help="Panel titles for --mode multi (one per --logdirs entry)")
+    ap.add_argument("--first-steps",  type=int, default=None,
+                    help="Keep only the first N unique time-steps per run (multi mode), "
+                         "so all panels show the same temporal window")
+    ap.add_argument("--mode",         choices=["heatmap", "final", "anim", "metrics", "multi"], default="heatmap")
     ap.add_argument("--out",          default=None)
     ap.add_argument("--csv",          default=None)
     ap.add_argument("--start-step",   type=int,   default=None)
@@ -555,6 +668,30 @@ def main() -> int:
     args = ap.parse_args()
 
     extent = _parse_extent(args.extent, args.arena_size, args.center_radius)
+
+    # multi mode reads each logdir independently — skip the single read_logs call
+    if args.mode == "multi":
+        logdirs = args.logdirs
+        if not logdirs:
+            raise SystemExit("--mode multi requires --logdirs dir1 dir2 ...")
+        out = args.out or "multi_traj.png"
+        title = args.title or "Trajectory grid"
+        try:
+            plot_multi_traj(
+                logdirs=logdirs,
+                extent=extent,
+                out=out,
+                title=title,
+                dpi=args.dpi,
+                panel_size=args.figsize,
+                run_labels=args.run_labels,
+                first_steps=args.first_steps,
+            )
+        except Exception as e:
+            raise SystemExit(f"Failed: {e}")
+        print(out)
+        return 0
+
     points = read_logs(args.logdir)
     points = select_window(points, args.start_step, args.end_step)
     if not points:
