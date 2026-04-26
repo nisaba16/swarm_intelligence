@@ -27,7 +27,7 @@ SPEED     = 10.0
 MAX_TURN  = 1.0
 TURN_GAIN = 1.0
 
-PRESET = 0
+PRESET = 1
 
 if(PRESET == 0){
     # --- Active inference precision parameters — milling regime ---
@@ -75,9 +75,9 @@ LOG_DIR       = "logs"
 #
 # To vary dissident proportion while keeping informed count fixed:
 #   set INFORMED_FRAC=0.5, sweep DISSIDENT_FRAC over 0.0, 0.33, 0.5, 0.67, 1.0
-N_ROBOTS       = 50
-INFORMED_FRAC  = 0.60 # x% of robots are informed
-DISSIDENT_FRAC = 0.1  # y% of informed are dissidents
+N_ROBOTS       = 40
+INFORMED_FRAC  = 0.90 # x% of robots are informed
+DISSIDENT_FRAC = 0.33  # y% of informed are dissidents
 
 # --- Goal priors ---
 # Leaders → target A: bottom-right  (-pi/4 = -45 deg)

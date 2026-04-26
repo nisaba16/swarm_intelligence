@@ -10,11 +10,66 @@ include "vec2.bzz"
 #   W_SOCIAL
 #   W_GOAL
 #   SOCIAL_ROTATION
+#
+# Optional logging (set before include):
+#   LOG_POSITIONS  1=on, 0=off  (default 0)
+#   LOG_EVERY      log every N ticks   (default 1)
+#   LOG_DIR        output directory    (default ".")
 # -----------------------------------------------------------------------------
 
 ROLE_LEADER    = 0
 ROLE_DISSIDENT = 1
 ROLE_NEUTRAL   = 2
+
+# --- Position logging (mirrors actinf_common.bzz) ---
+if(isnil(LOG_POSITIONS)) { LOG_POSITIONS = 0 }
+if(isnil(LOG_EVERY))     { LOG_EVERY     = 1 }
+if(isnil(LOG_DIR))       { LOG_DIR       = "." }
+
+poslog_file = nil
+poslog_step = 0
+
+function poslog_init() {
+  poslog_step = 0
+  poslog_file = nil
+  if(LOG_POSITIONS == 0) { return }
+  var fname = string.concat(LOG_DIR, "/pos_", string.tostring(id), ".csv")
+  poslog_file = io.fopen(fname, "w")
+  if(isnil(poslog_file)) {
+    LOG_POSITIONS = 0
+    return
+  }
+  io.fwrite(poslog_file, "step,id,role,x,y,yaw")
+}
+
+function poslog_tick() {
+  if(LOG_POSITIONS == 0) { return }
+  if(isnil(poslog_file)) { return }
+  if(LOG_EVERY <= 0) { return }
+  if((poslog_step % LOG_EVERY) != 0) {
+    poslog_step = poslog_step + 1
+    return
+  }
+  if(isnil(pose)) {
+    poslog_step = poslog_step + 1
+    return
+  }
+  # Remap to actinf convention: 0=neutral, 1=leader, 2=dissident
+  var log_role = 0
+  if(col_role == ROLE_LEADER)    { log_role = 1 }
+  if(col_role == ROLE_DISSIDENT) { log_role = 2 }
+  io.fwrite(poslog_file,
+            poslog_step, ",", id, ",", log_role, ",",
+            pose.position.x, ",", pose.position.y, ",", pose.orientation.yaw)
+  poslog_step = poslog_step + 1
+}
+
+function poslog_close() {
+  if(LOG_POSITIONS == 0) { return }
+  if(isnil(poslog_file)) { return }
+  io.fclose(poslog_file)
+  poslog_file = nil
+}
 
 HALF_PI = 1.57079632679
 
@@ -131,12 +186,16 @@ function collective_step() {
 }
 
 function init() {
-  paint_role(agent_role())
+  col_role = agent_role()
+  paint_role(col_role)
+  poslog_init()
 }
 
 function step() {
   collective_step()
+  poslog_tick()
 }
 
 function destroy() {
+  poslog_close()
 }

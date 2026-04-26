@@ -1,0 +1,14 @@
+# Milling baseline: weaker goal pull, rotated social term.
+EXPERIMENT_MODE = 1
+DISSIDENT_SHARE = 0
+LEADER_SHARE = 100
+W_SOCIAL = 1.5
+W_GOAL = 0.4
+SOCIAL_ROTATION = 1.57079632679
+
+# --- Logging ---
+LOG_POSITIONS = 1
+LOG_EVERY     = 5
+LOG_DIR       = "logs_milling"
+
+include "collective_common.bzz"
